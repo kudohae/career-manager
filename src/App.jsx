@@ -946,7 +946,7 @@ export default function App() {
     const folder=await findFile(FOLDER_NAME,"drive");
     folderIdRef.current=folder?folder.id:await getOrCreateFolder();
   }
-  function handleSignIn() { setLoginLoading(true); tokenClientRef.current?.requestAccessToken({ prompt:"consent" }); }
+  function handleSignIn() { setLoginLoading(true); tokenClientRef.current?.requestAccessToken({ prompt:"" }); }
   function handleSignOut() {
     const token=window.gapi.client.getToken(); if(token) window.google.accounts.oauth2.revoke(token.access_token);
     clearToken(); setData(EMPTY_DATA); setUserInfo(null); dataFileIdRef.current=null; folderIdRef.current=null; setAuthState("login");
