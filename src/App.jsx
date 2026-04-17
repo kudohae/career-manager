@@ -13,7 +13,7 @@ const CLIENT_ID = "406294571592-ufr5l29p3vvv4nfobec3ktosb8euj7gj.apps.googleuser
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.appdata",
   "https://www.googleapis.com/auth/drive.file",
-  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar",
 ].join(" ");
 const DATA_FILE   = "career_data.json";
 const FOLDER_NAME = "CareerKit Files";
