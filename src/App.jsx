@@ -148,6 +148,60 @@ async function removeFromGoogleCalendar(googleEventId, calId) {
   }
 }
 
+// Google Calendar → 앱 단방향 가져오기
+// calId: CareerKit 캘린더 ID
+// existingEvents: 현재 앱의 events 배열
+// 반환값: 새로 추가된 이벤트 배열 (기존에 없던 것만)
+async function fetchGoogleCalendarEvents(calId, existingEvents) {
+  // 이미 앱에 등록된 googleEventId 목록
+  const knownGoogleIds = new Set(existingEvents.map(e => e.googleEventId).filter(Boolean));
+
+  // 오늘 기준 과거 3개월 ~ 미래 12개월 범위로 가져옴
+  const now = new Date();
+  const timeMin = new Date(now.getFullYear(), now.getMonth() - 3, 1).toISOString();
+  const timeMax = new Date(now.getFullYear(), now.getMonth() + 12, 31).toISOString();
+
+  const res = await window.gapi.client.calendar.events.list({
+    calendarId: calId,
+    timeMin,
+    timeMax,
+    singleEvents: true,
+    orderBy: "startTime",
+    maxResults: 500,
+  });
+
+  const googleEvents = res.result.items || [];
+  const newEvents = [];
+
+  for (const ge of googleEvents) {
+    // 이미 앱이 알고 있는 이벤트는 건너뜀
+    if (knownGoogleIds.has(ge.id)) continue;
+
+    // 종일 이벤트(date)만 처리, 시간 지정 이벤트(dateTime)도 날짜만 추출
+    const rawDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
+    if (!rawDate) continue;
+
+    // colorId → type 역매핑 (앱에서 보낼 때: exam=11, cert=10, study/other=9)
+    const colorToType = { "11": "exam", "10": "cert", "9": "study" };
+    const type = colorToType[ge.colorId] || "other";
+
+    newEvents.push({
+      id: uid(),
+      title: ge.summary || "(제목 없음)",
+      date: rawDate,
+      type,
+      note: ge.description || "",
+      isDday: true,
+      syncCal: true,
+      googleEventId: ge.id,
+      syncedToCalendar: true,
+      importedFromCalendar: true, // 구글 캘린더에서 가져온 항목 표시용
+    });
+  }
+
+  return newEvents;
+}
+
 // ─── UTILS ─────────────────────────────────────────────────
 function uid() { return Math.random().toString(36).slice(2, 10); }
 function today() { return new Date().toLocaleDateString("sv-SE"); }
@@ -550,7 +604,42 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   const [addingCal, setAddingCal] = useState(false);
   const [removingCal, setRemovingCal] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
+  const [importing, setImporting] = useState(false);   // 가져오기 로딩 상태
+  const [importResult, setImportResult] = useState(null); // { count } | null
   const fld = k=>e=>setForm(p=>({...p,[k]:e.target.value}));
+
+  // 컴포넌트 마운트 시 자동으로 Google Calendar 이벤트를 가져옴
+  useEffect(() => {
+    handleImportFromGoogle({ silent: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Google Calendar → 앱으로 가져오기
+  // silent=true 이면 새 이벤트가 없을 때 결과 메시지를 표시하지 않음
+  async function handleImportFromGoogle({ silent = false } = {}) {
+    setImporting(true);
+    setImportResult(null);
+    try {
+      let calId = calendarId;
+      if (!calId) {
+        calId = await getOrCreateCareerCalendar();
+        setCalendarId(calId);
+      }
+      const newEvs = await fetchGoogleCalendarEvents(calId, events);
+      if (newEvs.length > 0) {
+        onChange([...events, ...newEvs]);
+        setImportResult({ count: newEvs.length });
+        setTimeout(() => setImportResult(null), 4000);
+      } else if (!silent) {
+        setImportResult({ count: 0 });
+        setTimeout(() => setImportResult(null), 3000);
+      }
+    } catch(e) {
+      console.error("Google Calendar 가져오기 실패:", e);
+      if (!silent) alert("Google 캘린더 가져오기에 실패했습니다.");
+    } finally {
+      setImporting(false);
+    }
+  }
 
   function openAdd(date=today()){ setPrefillDate(date); setForm(p=>({...p,date})); setShowAdd(true); }
 
@@ -603,12 +692,24 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   return (
     <div>
       <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:32 }}>
-        <div><h2 style={{ fontSize:20,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>{"\uD559\uC2B5 \uC2A4\uCF00\uC904\uB7EC"}</h2><p style={{ fontSize:13,color:C.text2,marginTop:4 }}>{"\uC2DC\uD5D8 \uC77C\uC815 \uBC0F D-Day \uAD00\uB9AC \u00B7 Google \uCE98\uB9B0\uB354 \uC5F0\uB3D9"}</p></div>
+        <div><h2 style={{ fontSize:20,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>{"학습 스케줄러"}</h2><p style={{ fontSize:13,color:C.text2,marginTop:4 }}>{"시험 일정 및 D-Day 관리 · Google 캘린더 연동"}</p></div>
         <div style={{ display:"flex",gap:8 }}>
-          <div style={{ display:"flex",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border2}` }}>{["month","week"].map(v=>(<button key={v} onClick={()=>setView(v)} style={{ padding:"7px 14px",fontSize:12,fontWeight:500,background:v===view?C.accent:"transparent",color:v===view?"white":C.text2,border:"none",cursor:"pointer",fontFamily:"inherit" }}>{v==="month"?"\uC6D4\uAC04":"\uC8FC\uAC04"}</button>))}</div>
-          <Btn icon={Plus} onClick={()=>openAdd()}>{"\uC77C\uC815 \uCD94\uAC00"}</Btn>
+          <div style={{ display:"flex",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border2}` }}>{["month","week"].map(v=>(<button key={v} onClick={()=>setView(v)} style={{ padding:"7px 14px",fontSize:12,fontWeight:500,background:v===view?C.accent:"transparent",color:v===view?"white":C.text2,border:"none",cursor:"pointer",fontFamily:"inherit" }}>{v==="month"?"월간":"주간"}</button>))}</div>
+          {/* Google 캘린더 가져오기 버튼 */}
+          <Btn icon={importing ? RefreshCw : CalendarCheck} variant="ghost" loading={importing} onClick={()=>handleImportFromGoogle({ silent:false })}>{"Google 가져오기"}</Btn>
+          <Btn icon={Plus} onClick={()=>openAdd()}>{"일정 추가"}</Btn>
         </div>
       </div>
+
+      {/* 가져오기 결과 토스트 */}
+      {importResult !== null && (
+        <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderRadius:12,marginBottom:16,background:importResult.count>0?`${C.success}18`:`${C.surface3}`,border:`1px solid ${importResult.count>0?C.success+40:C.border2}` }}>
+          <CalendarCheck size={14} color={importResult.count>0?C.success:C.text3}/>
+          <span style={{ fontSize:13,color:importResult.count>0?C.success:C.text2 }}>
+            {importResult.count>0 ? `Google 캘린더에서 ${importResult.count}개 일정을 가져왔습니다.` : "가져올 새 일정이 없습니다."}
+          </span>
+        </div>
+      )}
 
       {/* Calendar nav */}
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
@@ -692,7 +793,10 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
                   <div style={{ width:8,height:8,borderRadius:"50%",background:EVENT_TYPES[e.type]?.color,flexShrink:0 }}/>
                   <div style={{ flex:1,minWidth:0 }}>
                     <div style={{ fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.isDday&&<span style={{ color:C.accent,marginRight:4 }}>★</span>}{e.title}</div>
-                    {e.note&&<div style={{ fontSize:11,color:C.text3,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.note}</div>}
+                    <div style={{ display:"flex",alignItems:"center",gap:6,marginTop:2 }}>
+                      {e.note&&<span style={{ fontSize:11,color:C.text3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.note}</span>}
+                      {e.importedFromCalendar&&<span style={{ fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:99,background:`${C.accent}20`,color:C.accent,flexShrink:0,whiteSpace:"nowrap" }}>Google 가져옴</span>}
+                    </div>
                   </div>
                   <span style={{ fontSize:11,color:C.text3,flexShrink:0 }}>{formatDate(e.date)}</span>
                   {e.isDday&&<span style={{ fontSize:11,fontWeight:700,flexShrink:0,padding:"2px 8px",borderRadius:99,background:diff<0?"rgba(148,163,184,0.1)":diff===0?C.danger+"20":C.accent+"18",color:diff<0?C.text3:diff===0?C.danger:C.accent }}>{dDayLabel(diff)}</span>}
