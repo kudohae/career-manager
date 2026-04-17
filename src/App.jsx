@@ -146,7 +146,7 @@ async function removeFromGoogleCalendar(googleEventId, calId) {
 
 // ─── UTILS ─────────────────────────────────────────────────
 function uid() { return Math.random().toString(36).slice(2, 10); }
-function today() { return new Date().toISOString().split("T")[0]; }
+function today() { return new Date().toLocaleDateString("sv-SE"); }
 function diffDays(d) { const t = new Date(d); t.setHours(0,0,0,0); const n = new Date(); n.setHours(0,0,0,0); return Math.round((t-n)/86400000); }
 function formatDate(d) { if (!d) return "-"; return new Date(d).toLocaleDateString("ko-KR", { year:"numeric", month:"short", day:"numeric" }); }
 function formatBytes(b) { if (!b) return ""; if (b<1024) return b+"B"; if (b<1048576) return (b/1024).toFixed(1)+"KB"; return (b/1048576).toFixed(1)+"MB"; }
