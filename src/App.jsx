@@ -123,13 +123,17 @@ async function getOrCreateCareerCalendar() {
 
 async function addToGoogleCalendar(event, calId) {
   const start = event.date;
+  // 종일 이벤트는 end가 start보다 하루 뒤여야 함 (Google Calendar API 스펙)
+  const [y, m, d] = start.split("-").map(Number);
+  const endDate = new Date(y, m - 1, d + 1);
+  const end = endDate.toLocaleDateString("sv-SE");
   const res = await window.gapi.client.calendar.events.insert({
     calendarId: calId,
     resource: {
       summary: event.title,
       description: event.note || "",
-      start: { date: start, timeZone: "Asia/Seoul" },
-      end:   { date: start, timeZone: "Asia/Seoul" },
+      start: { date: start },
+      end:   { date: end },
       colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9",
     },
   });
@@ -148,7 +152,7 @@ async function removeFromGoogleCalendar(googleEventId, calId) {
 function uid() { return Math.random().toString(36).slice(2, 10); }
 function today() { return new Date().toLocaleDateString("sv-SE"); }
 function diffDays(d) { const t = new Date(d); t.setHours(0,0,0,0); const n = new Date(); n.setHours(0,0,0,0); return Math.round((t-n)/86400000); }
-function formatDate(d) { if (!d) return "-"; return new Date(d).toLocaleDateString("ko-KR", { year:"numeric", month:"short", day:"numeric" }); }
+function formatDate(d) { if (!d) return "-"; const [y,m,day] = d.split("-"); return new Date(+y, +m-1, +day).toLocaleDateString("ko-KR", { year:"numeric", month:"short", day:"numeric" }); }
 function formatBytes(b) { if (!b) return ""; if (b<1024) return b+"B"; if (b<1048576) return (b/1024).toFixed(1)+"KB"; return (b/1048576).toFixed(1)+"MB"; }
 function dDayLabel(d) { if (d===0) return "D-Day"; return d>0?`D-${d}`:`D+${Math.abs(d)}`; }
 function getExt(name="") { return name.split(".").pop()?.toLowerCase()||""; }
@@ -591,7 +595,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   }
 
   function getMonthGrid(d){const y=d.getFullYear(),m=d.getMonth(),first=new Date(y,m,1),last=new Date(y,m+1,0),cells=[];for(let i=0;i<first.getDay();i++)cells.push(null);for(let n=1;n<=last.getDate();n++)cells.push(new Date(y,m,n));while(cells.length%7!==0)cells.push(null);return cells;}
-  function eventsOn(d){if(!d)return[];return events.filter(e=>e.date===d.toISOString().split("T")[0]);}
+  function eventsOn(d){if(!d)return[];const ds=d.toLocaleDateString("sv-SE");return events.filter(e=>e.date===ds);}
   function getWeekDates(d){const b=new Date(d);b.setDate(d.getDate()-d.getDay());return Array.from({length:7},(_,i)=>{const x=new Date(b);x.setDate(b.getDate()+i);return x;});}
 
   const todayStr=today(), monthGrid=getMonthGrid(cursor), weekDates=getWeekDates(cursor);
@@ -619,7 +623,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
           <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)" }}>
             {WEEKDAYS.map((d,i)=>(<div key={d} style={{ padding:"10px 0",textAlign:"center",fontSize:11,fontWeight:600,color:i===0?C.danger:i===6?C.accent:C.text3,background:C.surface,borderBottom:`1px solid ${C.border}` }}>{d}</div>))}
             {monthGrid.map((day,i)=>{
-              const evs=eventsOn(day),ds=day?.toISOString().split("T")[0],isToday=ds===todayStr,isWeekend=day&&(day.getDay()===0||day.getDay()===6);
+              const evs=eventsOn(day),ds=day?.toLocaleDateString("sv-SE"),isToday=ds===todayStr,isWeekend=day&&(day.getDay()===0||day.getDay()===6);
               return (
                 <div key={i}
                   onClick={()=>day&&openAdd(ds)}
@@ -652,7 +656,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
         <div style={{ ...S.card,overflow:"hidden",marginBottom:24 }}>
           <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)" }}>
             {weekDates.map((day,i)=>{
-              const ds=day.toISOString().split("T")[0],isToday=ds===todayStr,evs=eventsOn(day);
+              const ds=day.toLocaleDateString("sv-SE"),isToday=ds===todayStr,evs=eventsOn(day);
               return (
                 <div key={i} style={{ borderRight:i<6?`1px solid ${C.border}`:"none" }}>
                   <div onClick={()=>openAdd(ds)} style={{ padding:"10px 0",textAlign:"center",cursor:"pointer",background:C.surface,borderBottom:`1px solid ${C.border}` }}>
