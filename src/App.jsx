@@ -396,7 +396,7 @@ function Library({ library, onChange, driveFolderId }) {
   const fileInputRef = useRef(null);
 
   function updateFolderInTree(folders,tid,upd){return folders.map(f=>{if(f.id===tid)return upd(f);if(f.folders?.length)return{...f,folders:updateFolderInTree(f.folders,tid,upd)};return f;});}
-  function removeFolderFromTree(folders,tid){return folders.filter(f=>f.id!==tid).map(f=>({...f,folders:f.folders?removeFolderFromTree(f.folders,tid):[];}));}
+  function removeFolderFromTree(folders,tid){return folders.filter(f=>f.id!==tid).map(f=>({...f,folders:f.folders?removeFolderFromTree(f.folders,tid):[]}));}
 
   function addSection(){if(!newSection.subject.trim())return;onChange([...library,{id:uid(),subject:newSection.subject.trim(),color:newSection.color,folders:[],files:[]}]);setNewSection({subject:"",color:SEC_COLORS[0]});setShowAddSection(false);}
   function deleteSection(id){onChange(library.filter(s=>s.id!==id));}
