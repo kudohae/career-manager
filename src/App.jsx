@@ -373,22 +373,17 @@ function AnnotationCanvas({ driveFileId }) {
   function onPointerDown(e) {
   if (!drawMode) return;
 
-  const isPen = e.pointerType === "pen";
+  // 👉 손가락이면 그냥 통과 (스크롤 허용)
+  if (e.pointerType !== "pen") return;
 
-  // 여러 케이스 대응
-  const isBarrel =
-    isPen && (
-      e.button === 2 ||
-      e.button === 5 ||
-      (e.buttons & 2) !== 0
-    );
-
-  if (isBarrel) {
+  // 여기부터 펜만 처리
+  if (e.button === 2 || (e.buttons & 2)) {
     sPenTemp.current = true;
     toolRef.current = "eraser";
   }
 
-  e.preventDefault();
+  e.preventDefault(); // ← 이제 펜일 때만 실행됨
+
   pushUndo();
   drawing.current = true;
 
@@ -401,18 +396,18 @@ function AnnotationCanvas({ driveFileId }) {
 }
   //여기까지 챗gpt
   function onPointerMove(e) {
-    if (!drawMode || !drawing.current) return;
-    e.preventDefault();
-    const canvas = canvasRef.current, ctx = canvas.getContext("2d");
-    const currentTool = toolRef.current;
-    const pos = getPos(e);
-    ctx.lineWidth  = currentTool === "eraser" ? sizeRef.current * 6 : sizeRef.current;
-    ctx.lineCap    = "round"; ctx.lineJoin = "round";
-    ctx.strokeStyle = colorRef.current;
-    ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
-    ctx.lineTo(pos.x, pos.y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
-  }
+  if (!drawing.current) return;
+
+  // 👉 손가락은 무시
+  if (e.pointerType !== "pen") return;
+
+  e.preventDefault();
+
+  const ctx = canvasRef.current.getContext("2d");
+  const pos = getPos(e);
+  ctx.lineTo(pos.x, pos.y);
+  ctx.stroke();
+}
 
   function onPointerUp(e) {
   if (!drawing.current) return;
@@ -516,7 +511,7 @@ function AnnotationCanvas({ driveFileId }) {
           position:"absolute", inset:0, width:"100%", height:"100%",
           cursor: drawMode ? (activeTool==="eraser" ? "cell" : "crosshair") : "default",
           pointerEvents: drawMode ? "all" : "none",
-          touchAction: "none",
+          touchAction: drawMode ? "pan-y" : "auto",
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
