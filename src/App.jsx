@@ -5,7 +5,7 @@ import {
   Clock, FileText, Image, File, FolderOpen, Folder, AlertCircle,
   GraduationCap, Zap, LogOut, Cloud, RefreshCw,
   Eye, Loader2, Menu, ChevronDown, ChevronRight as CR,
-  Download, Pencil, ExternalLink, CalendarPlus, CalendarCheck, Undo2, Eraser
+  Download, Pencil, ExternalLink, CalendarPlus, CalendarCheck
 } from "lucide-react";
 
 // ─── GOOGLE API ────────────────────────────────────────────
@@ -13,7 +13,7 @@ const CLIENT_ID = "406294571592-ufr5l29p3vvv4nfobec3ktosb8euj7gj.apps.googleuser
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.appdata",
   "https://www.googleapis.com/auth/drive.file",
-  "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/calendar.events",
 ].join(" ");
 const DATA_FILE   = "career_data.json";
 const FOLDER_NAME = "CareerKit Files";
@@ -95,20 +95,6 @@ async function fetchFileBlob(id) {
   if (!r.ok) throw new Error("Fetch failed");
   return r.blob();
 }
-async function saveAnnotation(driveFileId, dataUrl) {
-  const name = `annotation_${driveFileId}.json`;
-  const data = { dataUrl, updatedAt: new Date().toISOString() };
-  const existing = await findFile(name, "appDataFolder");
-  if (existing) { await updateJsonFile(existing.id, data); }
-  else { await createJsonFile(name, data, ["appDataFolder"]); }
-}
-async function loadAnnotation(driveFileId) {
-  const name = `annotation_${driveFileId}.json`;
-  const file = await findFile(name, "appDataFolder");
-  if (!file) return null;
-  const data = await readJsonFile(file.id);
-  return data.dataUrl || null;
-}
 
 // ─── GOOGLE CALENDAR HELPERS ───────────────────────────────
 // CareerKit 전용 캘린더를 만들거나 찾아서 사용
@@ -137,17 +123,13 @@ async function getOrCreateCareerCalendar() {
 
 async function addToGoogleCalendar(event, calId) {
   const start = event.date;
-  // 종일 이벤트는 end가 start보다 하루 뒤여야 함 (Google Calendar API 스펙)
-  const [y, m, d] = start.split("-").map(Number);
-  const endDate = new Date(y, m - 1, d + 1);
-  const end = endDate.toLocaleDateString("sv-SE");
   const res = await window.gapi.client.calendar.events.insert({
     calendarId: calId,
     resource: {
       summary: event.title,
       description: event.note || "",
-      start: { date: start },
-      end:   { date: end },
+      start: { date: start, timeZone: "Asia/Seoul" },
+      end:   { date: start, timeZone: "Asia/Seoul" },
       colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9",
     },
   });
@@ -162,72 +144,17 @@ async function removeFromGoogleCalendar(googleEventId, calId) {
   }
 }
 
-// Google Calendar → 앱 단방향 가져오기
-// calId: CareerKit 캘린더 ID
-// existingEvents: 현재 앱의 events 배열
-// 반환값: 새로 추가된 이벤트 배열 (기존에 없던 것만)
-async function fetchGoogleCalendarEvents(calId, existingEvents) {
-  // 이미 앱에 등록된 googleEventId 목록
-  const knownGoogleIds = new Set(existingEvents.map(e => e.googleEventId).filter(Boolean));
-
-  // 오늘 기준 과거 3개월 ~ 미래 12개월 범위로 가져옴
-  const now = new Date();
-  const timeMin = new Date(now.getFullYear(), now.getMonth() - 3, 1).toISOString();
-  const timeMax = new Date(now.getFullYear(), now.getMonth() + 12, 31).toISOString();
-
-  const res = await window.gapi.client.calendar.events.list({
-    calendarId: calId,
-    timeMin,
-    timeMax,
-    singleEvents: true,
-    orderBy: "startTime",
-    maxResults: 500,
-  });
-
-  const googleEvents = res.result.items || [];
-  const newEvents = [];
-
-  for (const ge of googleEvents) {
-    // 이미 앱이 알고 있는 이벤트는 건너뜀
-    if (knownGoogleIds.has(ge.id)) continue;
-
-    // 종일 이벤트(date)만 처리, 시간 지정 이벤트(dateTime)도 날짜만 추출
-    const rawDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
-    if (!rawDate) continue;
-
-    // colorId → type 역매핑 (앱에서 보낼 때: exam=11, cert=10, study/other=9)
-    const colorToType = { "11": "exam", "10": "cert", "9": "study" };
-    const type = colorToType[ge.colorId] || "other";
-
-    newEvents.push({
-      id: uid(),
-      title: ge.summary || "(제목 없음)",
-      date: rawDate,
-      type,
-      note: ge.description || "",
-      isDday: true,
-      syncCal: true,
-      googleEventId: ge.id,
-      syncedToCalendar: true,
-      importedFromCalendar: true, // 구글 캘린더에서 가져온 항목 표시용
-    });
-  }
-
-  return newEvents;
-}
-
 // ─── UTILS ─────────────────────────────────────────────────
 function uid() { return Math.random().toString(36).slice(2, 10); }
-function today() { return new Date().toLocaleDateString("sv-SE"); }
+function today() { return new Date().toISOString().split("T")[0]; }
 function diffDays(d) { const t = new Date(d); t.setHours(0,0,0,0); const n = new Date(); n.setHours(0,0,0,0); return Math.round((t-n)/86400000); }
-function formatDate(d) { if (!d) return "-"; const [y,m,day] = d.split("-"); return new Date(+y, +m-1, +day).toLocaleDateString("ko-KR", { year:"numeric", month:"short", day:"numeric" }); }
+function formatDate(d) { if (!d) return "-"; return new Date(d).toLocaleDateString("ko-KR", { year:"numeric", month:"short", day:"numeric" }); }
 function formatBytes(b) { if (!b) return ""; if (b<1024) return b+"B"; if (b<1048576) return (b/1024).toFixed(1)+"KB"; return (b/1048576).toFixed(1)+"MB"; }
 function dDayLabel(d) { if (d===0) return "D-Day"; return d>0?`D-${d}`:`D+${Math.abs(d)}`; }
 function getExt(name="") { return name.split(".").pop()?.toLowerCase()||""; }
 function isImage(name) { return ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(getExt(name)); }
 function isPdf(name) { return getExt(name)==="pdf"; }
-function isText(name) { return ["txt","md","json","csv","js","ts","jsx","tsx","css","xml","yaml","yml"].includes(getExt(name)); }
-function isHtml(name) { return getExt(name) === "html"; }
+function isText(name) { return ["txt","md","json","csv","js","ts","jsx","tsx","html","css","xml","yaml","yml"].includes(getExt(name)); }
 
 const C = {
   bg:"#080c14", surface:"#0f1521", surface2:"#161e2e", surface3:"#1c2640",
@@ -253,293 +180,11 @@ const S = {
   col:   { display:"flex", flexDirection:"column", gap:6 },
 };
 
-// ─── DRAG & DROP HELPERS ───────────────────────────────────
-function reorder(arr, fromIdx, toIdx) {
-  const a = [...arr];
-  const [item] = a.splice(fromIdx, 1);
-  a.splice(toIdx, 0, item);
-  return a;
-}
-function useDragList(items, onReorder) {
-  const dragIdx = useRef(null);
-  const [overIdx, setOverIdx] = useState(null);
-  function onDragStart(i) { dragIdx.current = i; }
-  function onDragOver(e, i) { e.preventDefault(); setOverIdx(i); }
-  function onDrop(e, i) {
-    e.preventDefault();
-    if (dragIdx.current !== null && dragIdx.current !== i) onReorder(reorder(items, dragIdx.current, i));
-    dragIdx.current = null; setOverIdx(null);
-  }
-  function onDragEnd() { dragIdx.current = null; setOverIdx(null); }
-  return { overIdx, onDragStart, onDragOver, onDrop, onDragEnd };
-}
-
-// ─── ANNOTATION CANVAS ─────────────────────────────────────
-// drawMode: 그리기 모드가 켜져 있을 때만 캔버스가 터치/포인터 입력을 먹음.
-// 꺼져 있으면 pointerEvents:"none" 이므로 페이지 스크롤이 정상 작동함.
-function AnnotationCanvas({ driveFileId }) {
-  const canvasRef  = useRef(null);
-  const drawing    = useRef(false);
-  const toolRef    = useRef("pen");   // ref로도 유지 → 이벤트 핸들러에서 최신값 보장
-  const colorRef   = useRef("#e74c3c");
-  const sizeRef    = useRef(3);
-  const undoStack  = useRef([]);       // ImageData 스냅샷 배열 (최대 30)
-  const saveTimer  = useRef(null);
-  const sPenTemp   = useRef(false);    // S펜 배럴 버튼 누르는 동안 임시 지우개
-
-  const [drawMode, setDrawMode] = useState(false); // 그리기 모드 토글
-  const [tool,  _setTool ] = useState("pen");
-  const [color, _setColor] = useState("#e74c3c");
-  const [size,  _setSize ] = useState(3);
-  const [saving,  setSaving ] = useState(false);
-  const [dirty,   setDirty  ] = useState(false);
-  const [undoLen, setUndoLen] = useState(0);  // 리렌더 트리거용
-
-  function setTool(t)  { toolRef.current  = t; _setTool(t); }
-  function setColor(c) { colorRef.current = c; _setColor(c); }
-  function setSize(s)  { sizeRef.current  = s; _setSize(s); }
-
-  // ── Ctrl+Z 단축키 ──
-  useEffect(() => {
-    function onKey(e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && drawMode) {
-        e.preventDefault(); undo();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [drawMode, undoLen]);
-
-  // ── 저장된 어노테이션 불러오기 ──
-  useEffect(() => {
-    if (!driveFileId || !canvasRef.current) return;
-    (async () => {
-      try {
-        const dataUrl = await loadAnnotation(driveFileId);
-        if (!dataUrl) return;
-        const img = new window.Image();
-        img.onload = () => {
-          const ctx = canvasRef.current?.getContext("2d");
-          if (ctx) ctx.drawImage(img, 0, 0);
-        };
-        img.src = dataUrl;
-      } catch(e) { console.error(e); }
-    })();
-  }, [driveFileId]);
-
-  // ── 좌표 계산 ──
-  function getPos(e) {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
-    const src = e.touches ? e.touches[0] : e;
-    return { x: (src.clientX - rect.left) * sx, y: (src.clientY - rect.top) * sy };
-  }
-
-  // ── Undo 스냅샷 저장 ──
-  function pushUndo() {
-    const canvas = canvasRef.current;
-    const snap = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-    undoStack.current.push(snap);
-    if (undoStack.current.length > 30) undoStack.current.shift();
-    setUndoLen(undoStack.current.length);
-  }
-
-  // ── Undo 실행 ──
-  function undo() {
-    if (!undoStack.current.length) return;
-    const snap = undoStack.current.pop();
-    canvasRef.current.getContext("2d").putImageData(snap, 0, 0);
-    setUndoLen(undoStack.current.length);
-    scheduleSaveDirty();
-  }
-
-  // ── 자동 저장 예약 ──
-  function scheduleSaveDirty() {
-    setDirty(true);
-    if (!driveFileId) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaving(true);
-      try {
-        await saveAnnotation(driveFileId, canvasRef.current.toDataURL("image/png"));
-        setDirty(false);
-      } catch(e) { console.error(e); } finally { setSaving(false); }
-    }, 1500);
-  }
-
-  // ── 그리기 이벤트 ──
-  // 핵심 원칙:
-  //   - pointerType === "pen"  → 그리기 처리, preventDefault로 스크롤 차단
-  //   - pointerType === "touch" → 아무것도 안 함, 브라우저 스크롤 통과
-  //   - 배럴 버튼(buttons & 2) 누른 채로 펜 닿으면 → 임시 지우개
-  function onPointerDown(e) {
-    // 손가락이면 완전히 무시 (스크롤 허용)
-    if (e.pointerType !== "pen") return;
-    // drawMode 꺼져 있고 배럴 버튼도 없으면 무시
-    const isBarrel = (e.buttons & 2) !== 0;
-    if (!drawMode && !isBarrel) return;
-
-    e.preventDefault();
-
-    // 배럴 버튼 → 임시 지우개
-    if (isBarrel) {
-      sPenTemp.current = true;
-      toolRef.current = "eraser";
-    }
-
-    pushUndo();
-    drawing.current = true;
-    canvasRef.current.setPointerCapture(e.pointerId);
-
-    const ctx = canvasRef.current.getContext("2d");
-    const pos = getPos(e);
-    // 선 스타일 초기화
-    const currentTool = toolRef.current;
-    ctx.lineWidth  = currentTool === "eraser" ? sizeRef.current * 6 : sizeRef.current;
-    ctx.lineCap    = "round"; ctx.lineJoin = "round";
-    ctx.strokeStyle = colorRef.current;
-    ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
-    ctx.beginPath();
-    ctx.moveTo(pos.x, pos.y);
-  }
-
-  function onPointerMove(e) {
-    if (e.pointerType !== "pen" || !drawing.current) return;
-    e.preventDefault();
-
-    const canvas = canvasRef.current, ctx = canvas.getContext("2d");
-    const currentTool = toolRef.current;
-    const pos = getPos(e);
-    ctx.lineWidth  = currentTool === "eraser" ? sizeRef.current * 6 : sizeRef.current;
-    ctx.lineCap    = "round"; ctx.lineJoin = "round";
-    ctx.strokeStyle = colorRef.current;
-    ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
-    ctx.lineTo(pos.x, pos.y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(pos.x, pos.y);
-  }
-
-  function onPointerUp(e) {
-    if (e.pointerType !== "pen" || !drawing.current) return;
-    drawing.current = false;
-    canvasRef.current.getContext("2d").beginPath();
-
-    // 배럴 버튼이 완전히 떼졌으면 원래 도구로 복원
-    if (sPenTemp.current && (e.buttons & 2) === 0) {
-      sPenTemp.current = false;
-      toolRef.current = tool;
-      _setTool(tool);
-    }
-
-    scheduleSaveDirty();
-  }
-  function clearCanvas() {
-    pushUndo();
-    const c = canvasRef.current;
-    c.getContext("2d").clearRect(0, 0, c.width, c.height);
-    scheduleSaveDirty();
-  }
-
-  const COLORS = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#3498db","#9b59b6","#ffffff","#000000"];
-  const activeTool = sPenTemp.current ? "eraser" : tool;
-
-  return (
-    <div style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-      {/* 그리기 모드 토글 버튼 — 항상 표시 */}
-      <div style={{ position:"absolute", top:8, left:8, zIndex:11, pointerEvents:"all" }}>
-        <button
-          onClick={()=>setDrawMode(p=>!p)}
-          title={drawMode ? "\uADF8\uB9AC\uAE30 \uBAA8\uB4DC \uB044\uAE30 (\uC2A4\uD06C\uB864 \uAC00\uB2A5)" : "\uADF8\uB9AC\uAE30 \uBAA8\uB4DC \uCF1C\uAE30"}
-          style={{
-            background: drawMode ? C.accent : "rgba(15,21,33,0.85)",
-            border: `1px solid ${drawMode ? C.accent : "rgba(255,255,255,0.15)"}`,
-            borderRadius: 10, padding:"6px 10px", cursor:"pointer",
-            display:"flex", alignItems:"center", gap:6,
-            color:"white", fontSize:11, fontWeight:600, fontFamily:"inherit",
-            boxShadow:"0 2px 12px rgba(0,0,0,0.4)",
-          }}>
-          <Pencil size={13}/>
-          {drawMode ? "\uADF8\uB9AC\uAE30 ON" : "\uADF8\uB9AC\uAE30"}
-        </button>
-      </div>
-
-      {/* 그리기 도구 패널 — drawMode일 때만 표시 */}
-      {drawMode && (
-        <div style={{ position:"absolute", top:8, right:8, zIndex:10, pointerEvents:"all" }}>
-          <div style={{
-            background:"rgba(15,21,33,0.92)", borderRadius:12, padding:"8px 6px",
-            display:"flex", flexDirection:"column", gap:5,
-            border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 4px 20px rgba(0,0,0,0.4)"
-          }}>
-            {/* 펜 */}
-            <button onClick={()=>setTool("pen")} title="\uD39C"
-              style={{ background:activeTool==="pen"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
-              <Pencil size={14}/>
-            </button>
-            {/* 지우개 */}
-            <button onClick={()=>setTool("eraser")} title="\uC9C0\uC6B0\uAC1C (S\uD39C \uBC30\uB7F4 \uBC84\uD2BC\uC73C\uB85C\uB3C4 \uC2E4\uD589)"
-              style={{ background:activeTool==="eraser"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
-              <Eraser size={14}/>
-            </button>
-            {/* 되돌리기 */}
-            <button onClick={undo} disabled={undoLen===0} title="\uB418\uB3CC\uB9AC\uAE30 (Ctrl+Z)"
-              style={{ background:"transparent", border:"none", cursor:undoLen?"pointer":"default", padding:6, borderRadius:8, display:"flex", color:undoLen?C.text2:C.text3, opacity:undoLen?1:0.4 }}>
-              <Undo2 size={14}/>
-            </button>
-            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-            {/* 굵기 슬라이더 */}
-            <input type="range" min={1} max={20} value={size} onChange={e=>setSize(Number(e.target.value))}
-              style={{ width:14, height:70, writingMode:"vertical-lr", direction:"rtl", cursor:"pointer", accentColor:C.accent }}/>
-            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-            {/* 색상 팔레트 */}
-            {COLORS.map(col=>(
-              <button key={col} onClick={()=>{ setTool("pen"); setColor(col); }}
-                style={{ width:20, height:20, borderRadius:"50%", background:col,
-                  border: color===col&&activeTool==="pen"?"2px solid white":"2px solid rgba(255,255,255,0.2)",
-                  cursor:"pointer", flexShrink:0 }}/>
-            ))}
-            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-            {/* 전체 지우기 */}
-            <button onClick={clearCanvas} title="\uC804\uCCB4 \uC9C0\uC6B0\uAE30"
-              style={{ background:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:C.danger }}>
-              <Trash2 size={14}/>
-            </button>
-            {/* 저장 상태 */}
-            {saving && <Loader2 size={14} color={C.accent} style={{ animation:"spin 1s linear infinite", margin:"0 auto" }}/>}
-            {dirty && !saving && <div style={{ width:6, height:6, borderRadius:"50%", background:C.warning, margin:"0 auto" }}/>}
-          </div>
-        </div>
-      )}
-
-      {/* 캔버스 — 항상 pointerEvents:all, touchAction:auto 유지
-          손가락 스크롤은 핸들러에서 pen만 처리하므로 자동으로 통과됨
-          drawMode 꺼져 있을 때도 배럴 버튼 지우개 작동 */}
-      <canvas ref={canvasRef} width={1200} height={1600}
-        style={{
-          position:"absolute", inset:0, width:"100%", height:"100%",
-          cursor: drawMode ? (activeTool==="eraser" ? "cell" : "crosshair") : "default",
-          pointerEvents: "all",
-          touchAction: "auto",  // ← 손가락 스크롤 허용
-        }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      />
-    </div>
-  );
-}
-
 // ─── FILE VIEWER ───────────────────────────────────────────
-function FileViewer({ file, onClose, onRename }) {
+function FileViewer({ file, onClose }) {
   const [state, setState] = useState("loading");
   const [blobUrl, setBlobUrl] = useState(null);
   const [textContent, setTextContent] = useState("");
-  const [editingName, setEditingName] = useState(false);
-  const [nameVal, setNameVal] = useState(file.name);
-  const [renaming, setRenaming] = useState(false);
   const FIcon = isImage(file.name) ? Image : isPdf(file.name) ? FileText : File;
 
   useEffect(() => {
@@ -549,46 +194,17 @@ function FileViewer({ file, onClose, onRename }) {
       try {
         const blob = await fetchFileBlob(file.driveId);
         if (isText(file.name)) { setTextContent(await blob.text()); setState("text"); }
-        else if (isHtml(file.name)) { setTextContent(await blob.text()); setState("html"); }
         else { const url = URL.createObjectURL(blob); setBlobUrl(url); setState(isImage(file.name)?"image":isPdf(file.name)?"pdf":"other"); }
       } catch { setState("error"); }
     })();
     return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
   }, [file.driveId]);
 
-  async function saveRename() {
-    if (!nameVal.trim() || nameVal === file.name) { setEditingName(false); return; }
-    setRenaming(true);
-    try { if (onRename) await onRename(file, nameVal.trim()); }
-    catch(e) { console.error(e); }
-    finally { setRenaming(false); setEditingName(false); }
-  }
-
   return (
     <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{ position:"fixed",inset:0,zIndex:60,background:"rgba(0,0,0,0.85)",backdropFilter:"blur(12px)",display:"flex",flexDirection:"column" }}>
       <div style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border2}`,flexShrink:0 }}>
         <div style={{ borderRadius:8,padding:6,background:C.accent+"18" }}><FIcon size={14} color={C.accent}/></div>
-        {/* 파일 이름 — 클릭하면 인라인 편집 */}
-        {editingName ? (
-          <input autoFocus value={nameVal} onChange={e=>setNameVal(e.target.value)}
-            onKeyDown={e=>{ if(e.key==="Enter") saveRename(); if(e.key==="Escape"){setEditingName(false);setNameVal(file.name);} }}
-            style={{ flex:1, background:"transparent", border:"none", borderBottom:`1px solid ${C.accent}`, color:C.text1, fontSize:13, fontWeight:500, outline:"none", fontFamily:"inherit" }}/>
-        ) : (
-          <span style={{ flex:1,fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span>
-        )}
-        {/* 이름 편집 버튼 */}
-        {onRename && !editingName && (
-          <button onClick={()=>{setEditingName(true);setNameVal(file.name);}} title="\uD30C\uC77C \uC774\uB984 \uBCC0\uACBD"
-            style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text2,display:"flex",flexShrink:0 }}>
-            <Pencil size={13}/>
-          </button>
-        )}
-        {editingName && (
-          <button onClick={saveRename} disabled={renaming}
-            style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.success,display:"flex",flexShrink:0 }}>
-            {renaming ? <Loader2 size={13} style={{ animation:"spin 1s linear infinite" }}/> : <Check size={13}/>}
-          </button>
-        )}
+        <span style={{ flex:1,fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span>
         {blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.text2,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none" }}><Download size={12}/>{"\uB2E4\uC6B4\uB85C\uB4DC"}</a>}
         {file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.text2,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={12}/>Drive{"\uC5D0\uC11C \uBCF4\uAE30"}</a>}
         <button onClick={onClose} style={{ background:"transparent",border:"none",cursor:"pointer",padding:6,color:C.text2,display:"flex",borderRadius:8 }}><X size={16}/></button>
@@ -598,19 +214,8 @@ function FileViewer({ file, onClose, onRename }) {
         {state==="error"&&<div style={{ textAlign:"center" }}><p style={{ fontSize:14,color:C.danger,marginBottom:8 }}>{"\uD30C\uC77C\uC744 \uBD88\uB7EC\uC62C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."}</p>{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ fontSize:13,color:C.accent }}>Drive{"\uC5D0\uC11C \uC5F4\uAE30"}</a>}</div>}
         {state==="no-drive"&&<p style={{ fontSize:14,color:C.text2 }}>{"\uB85C\uCEEC \uD30C\uC77C\uC785\uB2C8\uB2E4."}</p>}
         {state==="image"&&<img src={blobUrl} alt={file.name} style={{ maxWidth:"100%",maxHeight:"100%",borderRadius:12,boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}/>}
-        {state==="pdf"&&(
-          <div style={{ position:"relative", width:"100%", height:"100%" }}>
-            <iframe src={blobUrl} title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8 }}/>
-            <AnnotationCanvas driveFileId={file.driveId}/>
-          </div>
-        )}
+        {state==="pdf"&&<iframe src={blobUrl} title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8 }}/>}
         {state==="text"&&<div style={{ width:"100%",maxWidth:800,background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border2}` }}><pre style={{ fontSize:12,color:C.text2,lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word",overflowY:"auto",maxHeight:"70vh" }}>{textContent}</pre></div>}
-        {state==="html"&&(
-          <div style={{ position:"relative", width:"100%", height:"100%" }}>
-            <iframe srcDoc={textContent} sandbox="allow-scripts" title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8,background:"white" }}/>
-            <AnnotationCanvas driveFileId={file.driveId}/>
-          </div>
-        )}
         {state==="other"&&<div style={{ textAlign:"center" }}><div style={{ borderRadius:20,padding:24,background:C.surface2,display:"inline-flex",marginBottom:16 }}><File size={40} color={C.text3}/></div><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>{"\uC774 \uD615\uC2DD\uC740 \uBDF0\uC5B4\uC5D0\uC11C \uC9C1\uC811 \uBCF4\uAE30\uAC00 \uBD88\uAC00\uB2A5\uD569\uB2C8\uB2E4."}</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>{"\uB2E4\uC6B4\uB85C\uB4DC"}</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive{"\uC5D0\uC11C \uC5F4\uAE30"}</a>}</div></div>}
       </div>
     </div>
@@ -767,7 +372,7 @@ function FolderTree({ folder, sectionId, sectionColor, depth=0, onDeleteFile, on
       </div>
       {showAddSub&&(<div style={{ display:"flex",gap:8,padding:"8px 16px",paddingLeft:indentPx+20,background:C.surface2,borderTop:`1px solid ${C.border}` }}><input autoFocus value={subName} onChange={e=>setSubName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addSub();if(e.key==="Escape")setShowAddSub(false);}} placeholder={"\uD558\uC704 \uD3F4\uB354 \uC774\uB984 \u2192 Enter"} style={{ ...S.input,flex:1,fontSize:11,padding:"5px 8px" }}/><button onClick={addSub} style={{ background:C.accent,border:"none",borderRadius:8,color:"white",fontSize:11,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit" }}>{"\uCD94\uAC00"}</button><button onClick={()=>setShowAddSub(false)} style={{ background:"transparent",border:"none",cursor:"pointer",color:C.text3 }}><X size={12}/></button></div>)}
       {!collapsed&&(<>
-        {(folder.files||[]).map(file=>(<FileRow key={file.id} file={file} color={sectionColor} depth={depth+1} onDelete={f=>onDeleteFile(sectionId,f,folder.id)} onRename={(f,n)=>onRenameFile(sectionId,f,n,folder.id)} onView={f=>onViewFile(f,folder.id)} deleting={deletingFile}/>))}
+        {(folder.files||[]).map(file=>(<FileRow key={file.id} file={file} color={sectionColor} depth={depth+1} onDelete={f=>onDeleteFile(sectionId,f,folder.id)} onRename={(f,n)=>onRenameFile(sectionId,f,n,folder.id)} onView={onViewFile} deleting={deletingFile}/>))}
         {(folder.folders||[]).map(sub=>(<FolderTree key={sub.id} folder={sub} sectionId={sectionId} sectionColor={sectionColor} depth={depth+1} onDeleteFile={onDeleteFile} onRenameFile={onRenameFile} onViewFile={onViewFile} onDeleteFolder={onDeleteFolder} onRenameFolder={onRenameFolder} onAddSubfolder={onAddSubfolder} onUpload={onUpload} deletingFile={deletingFile} uploading={uploading} uploadTarget={uploadTarget}/>))}
         {(folder.files||[]).length===0&&(folder.folders||[]).length===0&&(<div style={{ padding:`8px 16px`,paddingLeft:indentPx+20,fontSize:11,color:C.text3 }}>{"\uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4."}</div>)}
       </>)}
@@ -791,7 +396,7 @@ function Library({ library, onChange, driveFolderId }) {
   const fileInputRef = useRef(null);
 
   function updateFolderInTree(folders,tid,upd){return folders.map(f=>{if(f.id===tid)return upd(f);if(f.folders?.length)return{...f,folders:updateFolderInTree(f.folders,tid,upd)};return f;});}
-  function removeFolderFromTree(folders,tid){return folders.filter(f=>f.id!==tid).map(f=>({...f,folders:f.folders?removeFolderFromTree(f.folders,tid):[]}));}
+  function removeFolderFromTree(folders,tid){return folders.filter(f=>f.id!==tid).map(f=>({...f,folders:f.folders?removeFolderFromTree(f.folders,tid):[];}));}
 
   function addSection(){if(!newSection.subject.trim())return;onChange([...library,{id:uid(),subject:newSection.subject.trim(),color:newSection.color,folders:[],files:[]}]);setNewSection({subject:"",color:SEC_COLORS[0]});setShowAddSection(false);}
   function deleteSection(id){onChange(library.filter(s=>s.id!==id));}
@@ -802,31 +407,6 @@ function Library({ library, onChange, driveFolderId }) {
   function handleRenameFolder(sid,fid,name){onChange(library.map(s=>{if(s.id!==sid)return s;return{...s,folders:updateFolderInTree(s.folders||[],fid,f=>({...f,name}))};}));}
 
   function openUpload(sid,fid=null){setUploadTarget({sectionId:sid,folderId:fid});setTimeout(()=>fileInputRef.current?.click(),50);}
-
-  // drag state for sections
-  const sectionDrag = useDragList(library, onChange);
-  // drag state for root files per section (keyed by sectionId)
-  const fileDragRefs = useRef({});
-  function getFileDrag(sectionId) {
-    if (!fileDragRefs.current[sectionId]) {
-      fileDragRefs.current[sectionId] = { dragIdx: null, overIdx: null };
-    }
-    return fileDragRefs.current[sectionId];
-  }
-  const [fileDragState, setFileDragState] = useState({});
-  function onFileDragStart(sectionId, i) { fileDragRefs.current[sectionId] = { dragIdx: i, overIdx: null }; }
-  function onFileDragOver(e, sectionId, i) { e.preventDefault(); fileDragRefs.current[sectionId] = { ...fileDragRefs.current[sectionId], overIdx: i }; setFileDragState(p=>({...p,[sectionId]:i})); }
-  function onFileDrop(e, sectionId, i) {
-    e.preventDefault();
-    const ref = fileDragRefs.current[sectionId] || {};
-    if (ref.dragIdx !== null && ref.dragIdx !== undefined && ref.dragIdx !== i) {
-      const section = library.find(s=>s.id===sectionId);
-      if (section) onChange(library.map(s=>s.id!==sectionId?s:{...s,files:reorder(s.files||[],ref.dragIdx,i)}));
-    }
-    fileDragRefs.current[sectionId] = { dragIdx: null, overIdx: null };
-    setFileDragState(p=>({...p,[sectionId]:null}));
-  }
-  function onFileDragEnd(sectionId) { fileDragRefs.current[sectionId] = { dragIdx: null, overIdx: null }; setFileDragState(p=>({...p,[sectionId]:null})); }
   async function handleFileSelect(e){
     const files=Array.from(e.target.files);if(!files.length||!driveFolderId||!uploadTarget)return;
     setUploading(true);
@@ -840,20 +420,14 @@ function Library({ library, onChange, driveFolderId }) {
   return (
     <div>
       <input ref={fileInputRef} type="file" multiple style={{ display:"none" }} onChange={handleFileSelect}/>
-      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)} onRename={async(f,n)=>{await handleRenameFile(viewingFile._sectionId,f,n,viewingFile._folderId);setViewingFile(p=>({...p,name:n}));}}/>}
+      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)}/>}
       <PageHeader title={"\uAC15\uC758 \uC790\uB8CC\uC2E4"} sub={"\uC139\uC158 \u2192 \uD3F4\uB354(\uC911\uCCA9) \u2192 \uD30C\uC77C"} action={<Btn icon={Plus} onClick={()=>setShowAddSection(true)}>{"\uC0C8 \uC139\uC158"}</Btn>}/>
       {library.length===0&&<EmptyState icon={FolderOpen} title={"\uAC15\uC758 \uC139\uC158\uC774 \uC5C6\uC2B5\uB2C8\uB2E4"} action={<Btn icon={Plus} onClick={()=>setShowAddSection(true)}>{"\uC139\uC158 \uCD94\uAC00"}</Btn>}/>}
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        {library.map((section,sIdx)=>{
+        {library.map(section=>{
           const collapsed=collapsedSections[section.id];
           return (
-            <div key={section.id}
-              draggable
-              onDragStart={()=>sectionDrag.onDragStart(sIdx)}
-              onDragOver={e=>sectionDrag.onDragOver(e,sIdx)}
-              onDrop={e=>sectionDrag.onDrop(e,sIdx)}
-              onDragEnd={sectionDrag.onDragEnd}
-              style={{ ...S.card,overflow:"hidden", opacity: sectionDrag.overIdx===sIdx&&sectionDrag.overIdx!==null?0.6:1, outline: sectionDrag.overIdx===sIdx?"2px dashed "+C.accent:"none" }}>
+            <div key={section.id} style={{ ...S.card,overflow:"hidden" }}>
               <div style={{ display:"flex",alignItems:"center",gap:10,padding:"14px 20px",borderLeft:`3px solid ${section.color}`,background:C.surface,borderBottom:`1px solid ${C.border}` }}>
                 <button onClick={()=>setCollapsedSections(p=>({...p,[section.id]:!p[section.id]}))} style={{ background:"transparent",border:"none",cursor:"pointer",padding:2,color:C.text3,display:"flex" }}>{collapsed?<CR size={13}/>:<ChevronDown size={13}/>}</button>
                 {editSectionId===section.id?(<input autoFocus value={editSectionName} onChange={e=>setEditSectionName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveSectionEdit(section.id);if(e.key==="Escape")setEditSectionId(null);}} style={{ flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${section.color}`,color:C.text1,fontSize:13,fontWeight:600,outline:"none",fontFamily:"inherit" }}/>):(<span style={{ flex:1,fontSize:13,fontWeight:600,color:C.text1 }}>{section.subject}</span>)}
@@ -863,8 +437,8 @@ function Library({ library, onChange, driveFolderId }) {
                 <button onClick={()=>deleteSection(section.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
               </div>
               {!collapsed&&(<div>
-                {(section.files||[]).map((file,fIdx)=>(<div key={file.id} draggable onDragStart={()=>onFileDragStart(section.id,fIdx)} onDragOver={e=>onFileDragOver(e,section.id,fIdx)} onDrop={e=>onFileDrop(e,section.id,fIdx)} onDragEnd={()=>onFileDragEnd(section.id)} style={{ opacity:fileDragState[section.id]===fIdx?0.5:1, outline:fileDragState[section.id]===fIdx?`2px dashed ${C.accent}`:"none" }}><FileRow file={file} color={section.color} depth={0} onDelete={f=>handleDeleteFile(section.id,f,null)} onRename={(f,n)=>handleRenameFile(section.id,f,n,null)} onView={f=>setViewingFile({...f,_sectionId:section.id,_folderId:null})} deleting={deletingFile}/></div>))}
-                {(section.folders||[]).map(folder=>(<FolderTree key={folder.id} folder={folder} sectionId={section.id} sectionColor={section.color} depth={0} onDeleteFile={handleDeleteFile} onRenameFile={handleRenameFile} onViewFile={(f,fid)=>setViewingFile({...f,_sectionId:section.id,_folderId:fid})} onDeleteFolder={handleDeleteFolder} onRenameFolder={handleRenameFolder} onAddSubfolder={handleAddSubfolder} onUpload={openUpload} deletingFile={deletingFile} uploading={uploading} uploadTarget={uploadTarget}/>))}
+                {(section.files||[]).map(file=>(<FileRow key={file.id} file={file} color={section.color} depth={0} onDelete={f=>handleDeleteFile(section.id,f,null)} onRename={(f,n)=>handleRenameFile(section.id,f,n,null)} onView={setViewingFile} deleting={deletingFile}/>))}
+                {(section.folders||[]).map(folder=>(<FolderTree key={folder.id} folder={folder} sectionId={section.id} sectionColor={section.color} depth={0} onDeleteFile={handleDeleteFile} onRenameFile={handleRenameFile} onViewFile={setViewingFile} onDeleteFolder={handleDeleteFolder} onRenameFolder={handleRenameFolder} onAddSubfolder={handleAddSubfolder} onUpload={openUpload} deletingFile={deletingFile} uploading={uploading} uploadTarget={uploadTarget}/>))}
                 {(section.files||[]).length===0&&(section.folders||[]).length===0&&(<div style={{ padding:"14px 20px",fontSize:12,color:C.text3 }}>{"\uD3F4\uB354\uB098 \uD30C\uC77C\uC744 \uCD94\uAC00\uD558\uC138\uC694."}</div>)}
               </div>)}
             </div>
@@ -900,31 +474,18 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
   async function handleFileSelect(e){const files=Array.from(e.target.files);if(!files.length||!driveFolderId)return;const{catId,certId}=uploadTargetRef.current;setUploadingCert(certId);try{const uploaded=await Promise.all(files.map(f=>uploadFileToDrive(f,driveFolderId)));const newFiles=uploaded.map(r=>({id:uid(),driveId:r.id,name:r.name,size:formatBytes(r.size),date:today(),webViewLink:r.webViewLink}));onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,files:[...(c.files||[]),...newFiles]})}));}catch(err){alert("\uC5C5\uB85C\uB4DC \uC2E4\uD328: "+err.message);}finally{setUploadingCert(null);uploadTargetRef.current=null;if(fileInputRef.current)fileInputRef.current.value="";}}
   async function handleDeleteFile(catId,certId,file){setDeletingFile(file.id);try{if(file.driveId)await deleteDriveFile(file.driveId);onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,files:(c.files||[]).filter(f=>f.id!==file.id)})}));}catch(e){console.error(e);}finally{setDeletingFile(null);}}
   function expiryStatus(expiry){if(!expiry)return null;const d=diffDays(expiry);if(d<0)return{text:"\uB9CC\uB8CC\uB428",color:C.danger};if(d<90)return{text:`${d}\uC77C \uD6C4 \uB9CC\uB8CC`,color:C.warning};return{text:"\uC720\uD6A8",color:C.success};}
-  const catDrag = useDragList(certCategories, onChange);
-  const certDragRefs = useRef({});
-  const [certDragState, setCertDragState] = useState({});
-  function onCertDragStart(catId,i){certDragRefs.current[catId]={dragIdx:i,overIdx:null};}
-  function onCertDragOver(e,catId,i){e.preventDefault();certDragRefs.current[catId]={...certDragRefs.current[catId],overIdx:i};setCertDragState(p=>({...p,[catId]:i}));}
-  function onCertDrop(e,catId,i){e.preventDefault();const ref=certDragRefs.current[catId]||{};if(ref.dragIdx!==null&&ref.dragIdx!==undefined&&ref.dragIdx!==i){onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:reorder(cat.certs||[],ref.dragIdx,i)}));}certDragRefs.current[catId]={dragIdx:null,overIdx:null};setCertDragState(p=>({...p,[catId]:null}));}
-  function onCertDragEnd(catId){certDragRefs.current[catId]={dragIdx:null,overIdx:null};setCertDragState(p=>({...p,[catId]:null}));}
 
   return (
     <div>
       <input ref={fileInputRef} type="file" multiple style={{ display:"none" }} onChange={handleFileSelect}/>
-      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)} onRename={async(f,n)=>{if(f.driveId){try{await renameDriveFile(f.driveId,n);}catch(e){console.error(e);}}onChange(certCategories.map(cat=>cat.id!==viewingFile._catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==viewingFile._certId?c:{...c,files:(c.files||[]).map(fi=>fi.id===f.id?{...fi,name:n}:fi)})}));setViewingFile(p=>({...p,name:n}));}}/>}
+      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)}/>}
       <PageHeader title={"\uC790\uACA9\uC99D \uBCF4\uAD00\uD568"} sub={"\uCE74\uD14C\uACE0\uB9AC \u2192 \uC790\uACA9\uC99D \u2192 \uAD00\uB828 \uD30C\uC77C"} action={<Btn icon={Plus} onClick={()=>setShowAddCat(true)}>{"\uCE74\uD14C\uACE0\uB9AC \uCD94\uAC00"}</Btn>}/>
       {certCategories.length===0&&<EmptyState icon={Award} title={"\uCE74\uD14C\uACE0\uB9AC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4"} sub={"\uC5B4\uD559, IT, \uAD6D\uAC00\uC790\uACA9\uC99D \uB4F1"} action={<Btn icon={Plus} onClick={()=>setShowAddCat(true)}>{"\uCE74\uD14C\uACE0\uB9AC \uCD94\uAC00"}</Btn>}/>}
       <div style={{ display:"flex",flexDirection:"column",gap:20 }}>
-        {certCategories.map((cat,catIdx)=>{
+        {certCategories.map(cat=>{
           const collapsed=collapsedCats[cat.id];
           return (
-            <div key={cat.id}
-              draggable
-              onDragStart={()=>catDrag.onDragStart(catIdx)}
-              onDragOver={e=>catDrag.onDragOver(e,catIdx)}
-              onDrop={e=>catDrag.onDrop(e,catIdx)}
-              onDragEnd={catDrag.onDragEnd}
-              style={{ ...S.card,overflow:"hidden", opacity:catDrag.overIdx===catIdx?0.6:1, outline:catDrag.overIdx===catIdx?"2px dashed "+C.accent:"none" }}>
+            <div key={cat.id} style={{ ...S.card,overflow:"hidden" }}>
               <div style={{ display:"flex",alignItems:"center",gap:10,padding:"14px 20px",borderBottom:`1px solid ${C.border}`,borderLeft:`3px solid ${cat.color}`,background:C.surface }}>
                 <button onClick={()=>setCollapsedCats(p=>({...p,[cat.id]:!p[cat.id]}))} style={{ background:"transparent",border:"none",cursor:"pointer",padding:2,color:C.text3,display:"flex" }}>{collapsed?<CR size={13}/>:<ChevronDown size={13}/>}</button>
                 <div style={{ width:10,height:10,borderRadius:"50%",background:cat.color,flexShrink:0 }}/>
@@ -936,16 +497,10 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
               {!collapsed&&(<div style={{ padding:16 }}>
                 {(cat.certs||[]).length===0?(<div style={{ fontSize:12,color:C.text3,padding:"8px 4px" }}>{"\uC790\uACA9\uC99D\uC744 \uCD94\uAC00\uD558\uC138\uC694."}</div>):(
                   <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12 }}>
-                    {(cat.certs||[]).map((cert,certIdx)=>{
+                    {(cat.certs||[]).map(cert=>{
                       const status=expiryStatus(cert.expiry);
                       return (
-                        <div key={cert.id}
-                          draggable
-                          onDragStart={()=>onCertDragStart(cat.id,certIdx)}
-                          onDragOver={e=>onCertDragOver(e,cat.id,certIdx)}
-                          onDrop={e=>onCertDrop(e,cat.id,certIdx)}
-                          onDragEnd={()=>onCertDragEnd(cat.id)}
-                          style={{ borderRadius:14,overflow:"hidden",background:cert.color,border:`1px solid ${cert.color}88`, opacity:certDragState[cat.id]===certIdx?0.5:1, outline:certDragState[cat.id]===certIdx?`2px dashed ${C.accent}`:"none", cursor:"grab" }}>
+                        <div key={cert.id} style={{ borderRadius:14,overflow:"hidden",background:cert.color,border:`1px solid ${cert.color}88` }}>
                           <div style={{ padding:16 }}>
                             <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12 }}>
                               <div style={{ borderRadius:10,padding:8,background:"rgba(255,255,255,0.12)" }}><Award size={16} color="rgba(255,255,255,0.9)"/></div>
@@ -962,7 +517,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
                             <span style={{ fontSize:10,color:"rgba(255,255,255,0.5)" }}>{cert.date?formatDate(cert.date):"\uB0A0\uC9DC \uBBF8\uC785\uB825"}</span>
                             {status&&<span style={{ fontSize:10,fontWeight:500,padding:"2px 7px",borderRadius:99,background:status.color+"25",color:status.color }}>{status.text}</span>}
                           </div>
-                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<div key={file.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"6px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)" }}><FileText size={10} color="rgba(255,255,255,0.4)"/><span style={{ flex:1,fontSize:10,color:"rgba(255,255,255,0.55)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span><button onClick={()=>setViewingFile({...file,_catId:cat.id,_certId:cert.id})} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.5)",padding:2 }}><Eye size={10}/></button><button onClick={()=>handleDeleteFile(cat.id,cert.id,file)} disabled={deletingFile===file.id} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.4)",padding:2 }}>{deletingFile===file.id?<Loader2 size={10} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={10}/>}</button></div>))}</div>)}
+                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<div key={file.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"6px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)" }}><FileText size={10} color="rgba(255,255,255,0.4)"/><span style={{ flex:1,fontSize:10,color:"rgba(255,255,255,0.55)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span><button onClick={()=>setViewingFile(file)} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.5)",padding:2 }}><Eye size={10}/></button><button onClick={()=>handleDeleteFile(cat.id,cert.id,file)} disabled={deletingFile===file.id} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.4)",padding:2 }}>{deletingFile===file.id?<Loader2 size={10} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={10}/>}</button></div>))}</div>)}
                           {cert.note&&<div style={{ padding:"6px 16px",fontSize:10,color:"rgba(255,255,255,0.35)",background:"rgba(0,0,0,0.15)" }}>{cert.note}</div>}
                         </div>
                       );
@@ -991,42 +546,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   const [addingCal, setAddingCal] = useState(false);
   const [removingCal, setRemovingCal] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
-  const [importing, setImporting] = useState(false);   // 가져오기 로딩 상태
-  const [importResult, setImportResult] = useState(null); // { count } | null
   const fld = k=>e=>setForm(p=>({...p,[k]:e.target.value}));
-
-  // 컴포넌트 마운트 시 자동으로 Google Calendar 이벤트를 가져옴
-  useEffect(() => {
-    handleImportFromGoogle({ silent: true });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Google Calendar → 앱으로 가져오기
-  // silent=true 이면 새 이벤트가 없을 때 결과 메시지를 표시하지 않음
-  async function handleImportFromGoogle({ silent = false } = {}) {
-    setImporting(true);
-    setImportResult(null);
-    try {
-      let calId = calendarId;
-      if (!calId) {
-        calId = await getOrCreateCareerCalendar();
-        setCalendarId(calId);
-      }
-      const newEvs = await fetchGoogleCalendarEvents(calId, events);
-      if (newEvs.length > 0) {
-        onChange([...events, ...newEvs]);
-        setImportResult({ count: newEvs.length });
-        setTimeout(() => setImportResult(null), 4000);
-      } else if (!silent) {
-        setImportResult({ count: 0 });
-        setTimeout(() => setImportResult(null), 3000);
-      }
-    } catch(e) {
-      console.error("Google Calendar 가져오기 실패:", e);
-      if (!silent) alert("Google 캘린더 가져오기에 실패했습니다.");
-    } finally {
-      setImporting(false);
-    }
-  }
 
   function openAdd(date=today()){ setPrefillDate(date); setForm(p=>({...p,date})); setShowAdd(true); }
 
@@ -1071,7 +591,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   }
 
   function getMonthGrid(d){const y=d.getFullYear(),m=d.getMonth(),first=new Date(y,m,1),last=new Date(y,m+1,0),cells=[];for(let i=0;i<first.getDay();i++)cells.push(null);for(let n=1;n<=last.getDate();n++)cells.push(new Date(y,m,n));while(cells.length%7!==0)cells.push(null);return cells;}
-  function eventsOn(d){if(!d)return[];const ds=d.toLocaleDateString("sv-SE");return events.filter(e=>e.date===ds);}
+  function eventsOn(d){if(!d)return[];return events.filter(e=>e.date===d.toISOString().split("T")[0]);}
   function getWeekDates(d){const b=new Date(d);b.setDate(d.getDate()-d.getDay());return Array.from({length:7},(_,i)=>{const x=new Date(b);x.setDate(b.getDate()+i);return x;});}
 
   const todayStr=today(), monthGrid=getMonthGrid(cursor), weekDates=getWeekDates(cursor);
@@ -1079,24 +599,12 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   return (
     <div>
       <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:32 }}>
-        <div><h2 style={{ fontSize:20,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>{"학습 스케줄러"}</h2><p style={{ fontSize:13,color:C.text2,marginTop:4 }}>{"시험 일정 및 D-Day 관리 · Google 캘린더 연동"}</p></div>
+        <div><h2 style={{ fontSize:20,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>{"\uD559\uC2B5 \uC2A4\uCF00\uC904\uB7EC"}</h2><p style={{ fontSize:13,color:C.text2,marginTop:4 }}>{"\uC2DC\uD5D8 \uC77C\uC815 \uBC0F D-Day \uAD00\uB9AC \u00B7 Google \uCE98\uB9B0\uB354 \uC5F0\uB3D9"}</p></div>
         <div style={{ display:"flex",gap:8 }}>
-          <div style={{ display:"flex",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border2}` }}>{["month","week"].map(v=>(<button key={v} onClick={()=>setView(v)} style={{ padding:"7px 14px",fontSize:12,fontWeight:500,background:v===view?C.accent:"transparent",color:v===view?"white":C.text2,border:"none",cursor:"pointer",fontFamily:"inherit" }}>{v==="month"?"월간":"주간"}</button>))}</div>
-          {/* Google 캘린더 가져오기 버튼 */}
-          <Btn icon={importing ? RefreshCw : CalendarCheck} variant="ghost" loading={importing} onClick={()=>handleImportFromGoogle({ silent:false })}>{"Google 가져오기"}</Btn>
-          <Btn icon={Plus} onClick={()=>openAdd()}>{"일정 추가"}</Btn>
+          <div style={{ display:"flex",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border2}` }}>{["month","week"].map(v=>(<button key={v} onClick={()=>setView(v)} style={{ padding:"7px 14px",fontSize:12,fontWeight:500,background:v===view?C.accent:"transparent",color:v===view?"white":C.text2,border:"none",cursor:"pointer",fontFamily:"inherit" }}>{v==="month"?"\uC6D4\uAC04":"\uC8FC\uAC04"}</button>))}</div>
+          <Btn icon={Plus} onClick={()=>openAdd()}>{"\uC77C\uC815 \uCD94\uAC00"}</Btn>
         </div>
       </div>
-
-      {/* 가져오기 결과 토스트 */}
-      {importResult !== null && (
-        <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderRadius:12,marginBottom:16,background:importResult.count>0?`${C.success}18`:`${C.surface3}`,border:`1px solid ${importResult.count>0?C.success+40:C.border2}` }}>
-          <CalendarCheck size={14} color={importResult.count>0?C.success:C.text3}/>
-          <span style={{ fontSize:13,color:importResult.count>0?C.success:C.text2 }}>
-            {importResult.count>0 ? `Google 캘린더에서 ${importResult.count}개 일정을 가져왔습니다.` : "가져올 새 일정이 없습니다."}
-          </span>
-        </div>
-      )}
 
       {/* Calendar nav */}
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
@@ -1111,7 +619,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
           <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)" }}>
             {WEEKDAYS.map((d,i)=>(<div key={d} style={{ padding:"10px 0",textAlign:"center",fontSize:11,fontWeight:600,color:i===0?C.danger:i===6?C.accent:C.text3,background:C.surface,borderBottom:`1px solid ${C.border}` }}>{d}</div>))}
             {monthGrid.map((day,i)=>{
-              const evs=eventsOn(day),ds=day?.toLocaleDateString("sv-SE"),isToday=ds===todayStr,isWeekend=day&&(day.getDay()===0||day.getDay()===6);
+              const evs=eventsOn(day),ds=day?.toISOString().split("T")[0],isToday=ds===todayStr,isWeekend=day&&(day.getDay()===0||day.getDay()===6);
               return (
                 <div key={i}
                   onClick={()=>day&&openAdd(ds)}
@@ -1144,7 +652,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
         <div style={{ ...S.card,overflow:"hidden",marginBottom:24 }}>
           <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)" }}>
             {weekDates.map((day,i)=>{
-              const ds=day.toLocaleDateString("sv-SE"),isToday=ds===todayStr,evs=eventsOn(day);
+              const ds=day.toISOString().split("T")[0],isToday=ds===todayStr,evs=eventsOn(day);
               return (
                 <div key={i} style={{ borderRight:i<6?`1px solid ${C.border}`:"none" }}>
                   <div onClick={()=>openAdd(ds)} style={{ padding:"10px 0",textAlign:"center",cursor:"pointer",background:C.surface,borderBottom:`1px solid ${C.border}` }}>
@@ -1180,10 +688,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
                   <div style={{ width:8,height:8,borderRadius:"50%",background:EVENT_TYPES[e.type]?.color,flexShrink:0 }}/>
                   <div style={{ flex:1,minWidth:0 }}>
                     <div style={{ fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.isDday&&<span style={{ color:C.accent,marginRight:4 }}>★</span>}{e.title}</div>
-                    <div style={{ display:"flex",alignItems:"center",gap:6,marginTop:2 }}>
-                      {e.note&&<span style={{ fontSize:11,color:C.text3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.note}</span>}
-                      {e.importedFromCalendar&&<span style={{ fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:99,background:`${C.accent}20`,color:C.accent,flexShrink:0,whiteSpace:"nowrap" }}>Google 가져옴</span>}
-                    </div>
+                    {e.note&&<div style={{ fontSize:11,color:C.text3,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.note}</div>}
                   </div>
                   <span style={{ fontSize:11,color:C.text3,flexShrink:0 }}>{formatDate(e.date)}</span>
                   {e.isDday&&<span style={{ fontSize:11,fontWeight:700,flexShrink:0,padding:"2px 8px",borderRadius:99,background:diff<0?"rgba(148,163,184,0.1)":diff===0?C.danger+"20":C.accent+"18",color:diff<0?C.text3:diff===0?C.danger:C.accent }}>{dDayLabel(diff)}</span>}
