@@ -415,18 +415,23 @@ function AnnotationCanvas({ driveFileId }) {
   }
 
   function onPointerUp(e) {
-    if (!drawing.current) return;
-    drawing.current = false;
-    canvasRef.current.getContext("2d").beginPath();
-    // S펜 배럴 버튼 해제 → 이전 도구로 복원
-    if (sPenTemp.current) {
-      sPenTemp.current = false;
-      toolRef.current = tool; // state의 tool (pen/eraser)
-      _setTool(tool);         // 리렌더
-    }
-    scheduleSaveDirty();
+  if (!drawing.current) return;
+
+  drawing.current = false;
+  canvasRef.current.getContext("2d").beginPath();
+
+  // 버튼이 실제로 다 떼졌는지 확인
+  const stillPressing = (e.buttons & 2) !== 0;
+
+  if (sPenTemp.current && !stillPressing) {
+    sPenTemp.current = false;
+    toolRef.current = tool;
+    _setTool(tool);
   }
 
+  scheduleSaveDirty();
+}
+// 여기까지도 챗지피티
   function clearCanvas() {
     pushUndo();
     const c = canvasRef.current;
