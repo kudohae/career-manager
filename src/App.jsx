@@ -212,7 +212,8 @@ function dDayLabel(d) { if (d===0) return "D-Day"; return d>0?`D-${d}`:`D+${Math
 function getExt(name="") { return name.split(".").pop()?.toLowerCase()||""; }
 function isImage(name) { return ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(getExt(name)); }
 function isPdf(name) { return getExt(name)==="pdf"; }
-function isText(name) { return ["txt","md","json","csv","js","ts","jsx","tsx","html","css","xml","yaml","yml"].includes(getExt(name)); }
+function isText(name) { return ["txt","md","json","csv","js","ts","jsx","tsx","css","xml","yaml","yml"].includes(getExt(name)); }
+function isHtml(name) { return getExt(name) === "html"; }
 
 const C = {
   bg:"#080c14", surface:"#0f1521", surface2:"#161e2e", surface3:"#1c2640",
@@ -252,6 +253,7 @@ function FileViewer({ file, onClose }) {
       try {
         const blob = await fetchFileBlob(file.driveId);
         if (isText(file.name)) { setTextContent(await blob.text()); setState("text"); }
+        else if (isHtml(file.name)) { setTextContent(await blob.text()); setState("html"); }
         else { const url = URL.createObjectURL(blob); setBlobUrl(url); setState(isImage(file.name)?"image":isPdf(file.name)?"pdf":"other"); }
       } catch { setState("error"); }
     })();
@@ -274,6 +276,17 @@ function FileViewer({ file, onClose }) {
         {state==="image"&&<img src={blobUrl} alt={file.name} style={{ maxWidth:"100%",maxHeight:"100%",borderRadius:12,boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}/>}
         {state==="pdf"&&<iframe src={blobUrl} title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8 }}/>}
         {state==="text"&&<div style={{ width:"100%",maxWidth:800,background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border2}` }}><pre style={{ fontSize:12,color:C.text2,lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word",overflowY:"auto",maxHeight:"70vh" }}>{textContent}</pre></div>}
+        {state==="html"&&(
+          <div style={{ width:"100%", height:"100%", display:"flex", flexDirection:"column", gap:12 }}>
+          {/* 샌드박스된 iframe으로 렌더링 */}
+          <iframe
+          srcDoc={textContent}
+          sandbox="allow-scripts"
+          title={file.name}
+          style={{ flex:1, border:"none", borderRadius:8, background:"white" }}
+          />
+       </div>
+)}
         {state==="other"&&<div style={{ textAlign:"center" }}><div style={{ borderRadius:20,padding:24,background:C.surface2,display:"inline-flex",marginBottom:16 }}><File size={40} color={C.text3}/></div><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>{"\uC774 \uD615\uC2DD\uC740 \uBDF0\uC5B4\uC5D0\uC11C \uC9C1\uC811 \uBCF4\uAE30\uAC00 \uBD88\uAC00\uB2A5\uD569\uB2C8\uB2E4."}</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>{"\uB2E4\uC6B4\uB85C\uB4DC"}</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive{"\uC5D0\uC11C \uC5F4\uAE30"}</a>}</div></div>}
       </div>
     </div>
