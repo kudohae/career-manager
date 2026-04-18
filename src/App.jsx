@@ -5,7 +5,7 @@ import {
   Clock, FileText, Image, File, FolderOpen, Folder, AlertCircle,
   GraduationCap, Zap, LogOut, Cloud, RefreshCw,
   Eye, Loader2, Menu, ChevronDown, ChevronRight as CR,
-  Download, Pencil, ExternalLink, CalendarPlus, CalendarCheck
+  Download, Pencil, ExternalLink, CalendarPlus, CalendarCheck, Undo2, Eraser
 } from "lucide-react";
 
 // ─── GOOGLE API ────────────────────────────────────────────
@@ -275,16 +275,42 @@ function useDragList(items, onReorder) {
 }
 
 // ─── ANNOTATION CANVAS ─────────────────────────────────────
+// drawMode: 그리기 모드가 켜져 있을 때만 캔버스가 터치/포인터 입력을 먹음.
+// 꺼져 있으면 pointerEvents:"none" 이므로 페이지 스크롤이 정상 작동함.
 function AnnotationCanvas({ driveFileId }) {
-  const canvasRef = useRef(null);
-  const drawing = useRef(false);
-  const [tool, setTool] = useState("pen");
-  const [color, setColor] = useState("#e74c3c");
-  const [size, setSize] = useState(3);
-  const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const saveTimer = useRef(null);
+  const canvasRef  = useRef(null);
+  const drawing    = useRef(false);
+  const toolRef    = useRef("pen");   // ref로도 유지 → 이벤트 핸들러에서 최신값 보장
+  const colorRef   = useRef("#e74c3c");
+  const sizeRef    = useRef(3);
+  const undoStack  = useRef([]);       // ImageData 스냅샷 배열 (최대 30)
+  const saveTimer  = useRef(null);
+  const sPenTemp   = useRef(false);    // S펜 배럴 버튼 누르는 동안 임시 지우개
 
+  const [drawMode, setDrawMode] = useState(false); // 그리기 모드 토글
+  const [tool,  _setTool ] = useState("pen");
+  const [color, _setColor] = useState("#e74c3c");
+  const [size,  _setSize ] = useState(3);
+  const [saving,  setSaving ] = useState(false);
+  const [dirty,   setDirty  ] = useState(false);
+  const [undoLen, setUndoLen] = useState(0);  // 리렌더 트리거용
+
+  function setTool(t)  { toolRef.current  = t; _setTool(t); }
+  function setColor(c) { colorRef.current = c; _setColor(c); }
+  function setSize(s)  { sizeRef.current  = s; _setSize(s); }
+
+  // ── Ctrl+Z 단축키 ──
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && drawMode) {
+        e.preventDefault(); undo();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawMode, undoLen]);
+
+  // ── 저장된 어노테이션 불러오기 ──
   useEffect(() => {
     if (!driveFileId || !canvasRef.current) return;
     (async () => {
@@ -292,12 +318,16 @@ function AnnotationCanvas({ driveFileId }) {
         const dataUrl = await loadAnnotation(driveFileId);
         if (!dataUrl) return;
         const img = new window.Image();
-        img.onload = () => { const ctx = canvasRef.current?.getContext("2d"); if (ctx) ctx.drawImage(img, 0, 0); };
+        img.onload = () => {
+          const ctx = canvasRef.current?.getContext("2d");
+          if (ctx) ctx.drawImage(img, 0, 0);
+        };
         img.src = dataUrl;
       } catch(e) { console.error(e); }
     })();
   }, [driveFileId]);
 
+  // ── 좌표 계산 ──
   function getPos(e) {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -305,73 +335,186 @@ function AnnotationCanvas({ driveFileId }) {
     const src = e.touches ? e.touches[0] : e;
     return { x: (src.clientX - rect.left) * sx, y: (src.clientY - rect.top) * sy };
   }
-  function startDraw(e) {
-    e.preventDefault(); drawing.current = true;
-    const ctx = canvasRef.current.getContext("2d");
-    const pos = getPos(e); ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+
+  // ── Undo 스냅샷 저장 ──
+  function pushUndo() {
+    const canvas = canvasRef.current;
+    const snap = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+    undoStack.current.push(snap);
+    if (undoStack.current.length > 30) undoStack.current.shift();
+    setUndoLen(undoStack.current.length);
   }
-  function draw(e) {
-    e.preventDefault(); if (!drawing.current) return;
-    const canvas = canvasRef.current, ctx = canvas.getContext("2d");
-    const pos = getPos(e);
-    ctx.lineWidth = tool === "eraser" ? size * 6 : size;
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.strokeStyle = color;
-    ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
-    ctx.lineTo(pos.x, pos.y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+
+  // ── Undo 실행 ──
+  function undo() {
+    if (!undoStack.current.length) return;
+    const snap = undoStack.current.pop();
+    canvasRef.current.getContext("2d").putImageData(snap, 0, 0);
+    setUndoLen(undoStack.current.length);
+    scheduleSaveDirty();
+  }
+
+  // ── 자동 저장 예약 ──
+  function scheduleSaveDirty() {
     setDirty(true);
-  }
-  function endDraw(e) {
-    if (!drawing.current) return; drawing.current = false;
-    canvasRef.current.getContext("2d").beginPath();
     if (!driveFileId) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       setSaving(true);
-      try { await saveAnnotation(driveFileId, canvasRef.current.toDataURL("image/png")); setDirty(false); }
-      catch(e) { console.error(e); } finally { setSaving(false); }
+      try {
+        await saveAnnotation(driveFileId, canvasRef.current.toDataURL("image/png"));
+        setDirty(false);
+      } catch(e) { console.error(e); } finally { setSaving(false); }
     }, 1500);
   }
-  function clearCanvas() {
-    const c = canvasRef.current; c.getContext("2d").clearRect(0, 0, c.width, c.height); setDirty(true);
+
+  // ── 그리기 이벤트 ──
+  // pointerdown: S펜 배럴 버튼(button===2) 감지 → 임시 지우개
+  function onPointerDown(e) {
+    if (!drawMode) return;
+    if (e.pointerType === "pen" && e.button === 2) {
+      sPenTemp.current = true;
+      toolRef.current = "eraser";
+    }
+    e.preventDefault();
+    pushUndo();
+    drawing.current = true;
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+    canvasRef.current.setPointerCapture(e.pointerId);
   }
+
+  function onPointerMove(e) {
+    if (!drawMode || !drawing.current) return;
+    e.preventDefault();
+    const canvas = canvasRef.current, ctx = canvas.getContext("2d");
+    const currentTool = toolRef.current;
+    const pos = getPos(e);
+    ctx.lineWidth  = currentTool === "eraser" ? sizeRef.current * 6 : sizeRef.current;
+    ctx.lineCap    = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = colorRef.current;
+    ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+    ctx.lineTo(pos.x, pos.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+  }
+
+  function onPointerUp(e) {
+    if (!drawing.current) return;
+    drawing.current = false;
+    canvasRef.current.getContext("2d").beginPath();
+    // S펜 배럴 버튼 해제 → 이전 도구로 복원
+    if (sPenTemp.current) {
+      sPenTemp.current = false;
+      toolRef.current = tool; // state의 tool (pen/eraser)
+      _setTool(tool);         // 리렌더
+    }
+    scheduleSaveDirty();
+  }
+
+  function clearCanvas() {
+    pushUndo();
+    const c = canvasRef.current;
+    c.getContext("2d").clearRect(0, 0, c.width, c.height);
+    scheduleSaveDirty();
+  }
+
   const COLORS = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#3498db","#9b59b6","#ffffff","#000000"];
+  const activeTool = sPenTemp.current ? "eraser" : tool;
+
   return (
     <div style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-      {/* Toolbar */}
-      <div style={{ position:"absolute", top:8, right:8, zIndex:10, pointerEvents:"all" }}>
-        <div style={{ background:"rgba(15,21,33,0.92)", borderRadius:12, padding:"8px 6px", display:"flex", flexDirection:"column", gap:5, border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 4px 20px rgba(0,0,0,0.4)" }}>
-          <button onClick={()=>setTool("pen")} title="\uD39C" style={{ background:tool==="pen"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}><Pencil size={14}/></button>
-          <button onClick={()=>setTool("eraser")} title="\uC9C0\uC6B0\uAC1C" style={{ background:tool==="eraser"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}><X size={14}/></button>
-          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-          <input type="range" min={1} max={20} value={size} onChange={e=>setSize(Number(e.target.value))}
-            style={{ width:14, height:70, writingMode:"vertical-lr", direction:"rtl", cursor:"pointer", accentColor:C.accent }}/>
-          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-          {COLORS.map(col=>(
-            <button key={col} onClick={()=>{setTool("pen");setColor(col);}}
-              style={{ width:20, height:20, borderRadius:"50%", background:col, border: color===col&&tool==="pen"?"2px solid white":"2px solid rgba(255,255,255,0.2)", cursor:"pointer", flexShrink:0 }}/>
-          ))}
-          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-          <button onClick={clearCanvas} title="\uC804\uCCB4 \uC9C0\uC6B0\uAE30" style={{ background:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:C.danger }}><Trash2 size={14}/></button>
-          {saving && <Loader2 size={14} color={C.accent} style={{ animation:"spin 1s linear infinite", margin:"0 auto" }}/>}
-          {dirty && !saving && <div style={{ width:6, height:6, borderRadius:"50%", background:C.warning, margin:"0 auto" }}/>}
-        </div>
+      {/* 그리기 모드 토글 버튼 — 항상 표시 */}
+      <div style={{ position:"absolute", top:8, left:8, zIndex:11, pointerEvents:"all" }}>
+        <button
+          onClick={()=>setDrawMode(p=>!p)}
+          title={drawMode ? "\uADF8\uB9AC\uAE30 \uBAA8\uB4DC \uB044\uAE30 (\uC2A4\uD06C\uB864 \uAC00\uB2A5)" : "\uADF8\uB9AC\uAE30 \uBAA8\uB4DC \uCF1C\uAE30"}
+          style={{
+            background: drawMode ? C.accent : "rgba(15,21,33,0.85)",
+            border: `1px solid ${drawMode ? C.accent : "rgba(255,255,255,0.15)"}`,
+            borderRadius: 10, padding:"6px 10px", cursor:"pointer",
+            display:"flex", alignItems:"center", gap:6,
+            color:"white", fontSize:11, fontWeight:600, fontFamily:"inherit",
+            boxShadow:"0 2px 12px rgba(0,0,0,0.4)",
+          }}>
+          <Pencil size={13}/>
+          {drawMode ? "\uADF8\uB9AC\uAE30 ON" : "\uADF8\uB9AC\uAE30"}
+        </button>
       </div>
-      {/* Canvas overlay */}
+
+      {/* 그리기 도구 패널 — drawMode일 때만 표시 */}
+      {drawMode && (
+        <div style={{ position:"absolute", top:8, right:8, zIndex:10, pointerEvents:"all" }}>
+          <div style={{
+            background:"rgba(15,21,33,0.92)", borderRadius:12, padding:"8px 6px",
+            display:"flex", flexDirection:"column", gap:5,
+            border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 4px 20px rgba(0,0,0,0.4)"
+          }}>
+            {/* 펜 */}
+            <button onClick={()=>setTool("pen")} title="\uD39C"
+              style={{ background:activeTool==="pen"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
+              <Pencil size={14}/>
+            </button>
+            {/* 지우개 */}
+            <button onClick={()=>setTool("eraser")} title="\uC9C0\uC6B0\uAC1C (S\uD39C \uBC30\uB7F4 \uBC84\uD2BC\uC73C\uB85C\uB3C4 \uC2E4\uD589)"
+              style={{ background:activeTool==="eraser"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
+              <Eraser size={14}/>
+            </button>
+            {/* 되돌리기 */}
+            <button onClick={undo} disabled={undoLen===0} title="\uB418\uB3CC\uB9AC\uAE30 (Ctrl+Z)"
+              style={{ background:"transparent", border:"none", cursor:undoLen?"pointer":"default", padding:6, borderRadius:8, display:"flex", color:undoLen?C.text2:C.text3, opacity:undoLen?1:0.4 }}>
+              <Undo2 size={14}/>
+            </button>
+            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+            {/* 굵기 슬라이더 */}
+            <input type="range" min={1} max={20} value={size} onChange={e=>setSize(Number(e.target.value))}
+              style={{ width:14, height:70, writingMode:"vertical-lr", direction:"rtl", cursor:"pointer", accentColor:C.accent }}/>
+            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+            {/* 색상 팔레트 */}
+            {COLORS.map(col=>(
+              <button key={col} onClick={()=>{ setTool("pen"); setColor(col); }}
+                style={{ width:20, height:20, borderRadius:"50%", background:col,
+                  border: color===col&&activeTool==="pen"?"2px solid white":"2px solid rgba(255,255,255,0.2)",
+                  cursor:"pointer", flexShrink:0 }}/>
+            ))}
+            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+            {/* 전체 지우기 */}
+            <button onClick={clearCanvas} title="\uC804\uCCB4 \uC9C0\uC6B0\uAE30"
+              style={{ background:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:C.danger }}>
+              <Trash2 size={14}/>
+            </button>
+            {/* 저장 상태 */}
+            {saving && <Loader2 size={14} color={C.accent} style={{ animation:"spin 1s linear infinite", margin:"0 auto" }}/>}
+            {dirty && !saving && <div style={{ width:6, height:6, borderRadius:"50%", background:C.warning, margin:"0 auto" }}/>}
+          </div>
+        </div>
+      )}
+
+      {/* 캔버스 — drawMode일 때만 pointerEvents 활성화 */}
       <canvas ref={canvasRef} width={1200} height={1600}
-        style={{ position:"absolute", inset:0, width:"100%", height:"100%", cursor:tool==="eraser"?"cell":"crosshair", pointerEvents:"all", touchAction:"none" }}
-        onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-        onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}/>
+        style={{
+          position:"absolute", inset:0, width:"100%", height:"100%",
+          cursor: drawMode ? (activeTool==="eraser" ? "cell" : "crosshair") : "default",
+          pointerEvents: drawMode ? "all" : "none",
+          touchAction: "none",
+        }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      />
     </div>
   );
 }
 
 // ─── FILE VIEWER ───────────────────────────────────────────
-function FileViewer({ file, onClose }) {
+function FileViewer({ file, onClose, onRename }) {
   const [state, setState] = useState("loading");
   const [blobUrl, setBlobUrl] = useState(null);
   const [textContent, setTextContent] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [nameVal, setNameVal] = useState(file.name);
+  const [renaming, setRenaming] = useState(false);
   const FIcon = isImage(file.name) ? Image : isPdf(file.name) ? FileText : File;
 
   useEffect(() => {
@@ -388,11 +531,39 @@ function FileViewer({ file, onClose }) {
     return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
   }, [file.driveId]);
 
+  async function saveRename() {
+    if (!nameVal.trim() || nameVal === file.name) { setEditingName(false); return; }
+    setRenaming(true);
+    try { if (onRename) await onRename(file, nameVal.trim()); }
+    catch(e) { console.error(e); }
+    finally { setRenaming(false); setEditingName(false); }
+  }
+
   return (
     <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{ position:"fixed",inset:0,zIndex:60,background:"rgba(0,0,0,0.85)",backdropFilter:"blur(12px)",display:"flex",flexDirection:"column" }}>
       <div style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border2}`,flexShrink:0 }}>
         <div style={{ borderRadius:8,padding:6,background:C.accent+"18" }}><FIcon size={14} color={C.accent}/></div>
-        <span style={{ flex:1,fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span>
+        {/* 파일 이름 — 클릭하면 인라인 편집 */}
+        {editingName ? (
+          <input autoFocus value={nameVal} onChange={e=>setNameVal(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") saveRename(); if(e.key==="Escape"){setEditingName(false);setNameVal(file.name);} }}
+            style={{ flex:1, background:"transparent", border:"none", borderBottom:`1px solid ${C.accent}`, color:C.text1, fontSize:13, fontWeight:500, outline:"none", fontFamily:"inherit" }}/>
+        ) : (
+          <span style={{ flex:1,fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span>
+        )}
+        {/* 이름 편집 버튼 */}
+        {onRename && !editingName && (
+          <button onClick={()=>{setEditingName(true);setNameVal(file.name);}} title="\uD30C\uC77C \uC774\uB984 \uBCC0\uACBD"
+            style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text2,display:"flex",flexShrink:0 }}>
+            <Pencil size={13}/>
+          </button>
+        )}
+        {editingName && (
+          <button onClick={saveRename} disabled={renaming}
+            style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.success,display:"flex",flexShrink:0 }}>
+            {renaming ? <Loader2 size={13} style={{ animation:"spin 1s linear infinite" }}/> : <Check size={13}/>}
+          </button>
+        )}
         {blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.text2,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none" }}><Download size={12}/>{"\uB2E4\uC6B4\uB85C\uB4DC"}</a>}
         {file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.text2,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={12}/>Drive{"\uC5D0\uC11C \uBCF4\uAE30"}</a>}
         <button onClick={onClose} style={{ background:"transparent",border:"none",cursor:"pointer",padding:6,color:C.text2,display:"flex",borderRadius:8 }}><X size={16}/></button>
@@ -571,7 +742,7 @@ function FolderTree({ folder, sectionId, sectionColor, depth=0, onDeleteFile, on
       </div>
       {showAddSub&&(<div style={{ display:"flex",gap:8,padding:"8px 16px",paddingLeft:indentPx+20,background:C.surface2,borderTop:`1px solid ${C.border}` }}><input autoFocus value={subName} onChange={e=>setSubName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addSub();if(e.key==="Escape")setShowAddSub(false);}} placeholder={"\uD558\uC704 \uD3F4\uB354 \uC774\uB984 \u2192 Enter"} style={{ ...S.input,flex:1,fontSize:11,padding:"5px 8px" }}/><button onClick={addSub} style={{ background:C.accent,border:"none",borderRadius:8,color:"white",fontSize:11,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit" }}>{"\uCD94\uAC00"}</button><button onClick={()=>setShowAddSub(false)} style={{ background:"transparent",border:"none",cursor:"pointer",color:C.text3 }}><X size={12}/></button></div>)}
       {!collapsed&&(<>
-        {(folder.files||[]).map(file=>(<FileRow key={file.id} file={file} color={sectionColor} depth={depth+1} onDelete={f=>onDeleteFile(sectionId,f,folder.id)} onRename={(f,n)=>onRenameFile(sectionId,f,n,folder.id)} onView={onViewFile} deleting={deletingFile}/>))}
+        {(folder.files||[]).map(file=>(<FileRow key={file.id} file={file} color={sectionColor} depth={depth+1} onDelete={f=>onDeleteFile(sectionId,f,folder.id)} onRename={(f,n)=>onRenameFile(sectionId,f,n,folder.id)} onView={f=>onViewFile(f,folder.id)} deleting={deletingFile}/>))}
         {(folder.folders||[]).map(sub=>(<FolderTree key={sub.id} folder={sub} sectionId={sectionId} sectionColor={sectionColor} depth={depth+1} onDeleteFile={onDeleteFile} onRenameFile={onRenameFile} onViewFile={onViewFile} onDeleteFolder={onDeleteFolder} onRenameFolder={onRenameFolder} onAddSubfolder={onAddSubfolder} onUpload={onUpload} deletingFile={deletingFile} uploading={uploading} uploadTarget={uploadTarget}/>))}
         {(folder.files||[]).length===0&&(folder.folders||[]).length===0&&(<div style={{ padding:`8px 16px`,paddingLeft:indentPx+20,fontSize:11,color:C.text3 }}>{"\uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4."}</div>)}
       </>)}
@@ -644,7 +815,7 @@ function Library({ library, onChange, driveFolderId }) {
   return (
     <div>
       <input ref={fileInputRef} type="file" multiple style={{ display:"none" }} onChange={handleFileSelect}/>
-      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)}/>}
+      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)} onRename={async(f,n)=>{await handleRenameFile(viewingFile._sectionId,f,n,viewingFile._folderId);setViewingFile(p=>({...p,name:n}));}}/>}
       <PageHeader title={"\uAC15\uC758 \uC790\uB8CC\uC2E4"} sub={"\uC139\uC158 \u2192 \uD3F4\uB354(\uC911\uCCA9) \u2192 \uD30C\uC77C"} action={<Btn icon={Plus} onClick={()=>setShowAddSection(true)}>{"\uC0C8 \uC139\uC158"}</Btn>}/>
       {library.length===0&&<EmptyState icon={FolderOpen} title={"\uAC15\uC758 \uC139\uC158\uC774 \uC5C6\uC2B5\uB2C8\uB2E4"} action={<Btn icon={Plus} onClick={()=>setShowAddSection(true)}>{"\uC139\uC158 \uCD94\uAC00"}</Btn>}/>}
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
@@ -667,8 +838,8 @@ function Library({ library, onChange, driveFolderId }) {
                 <button onClick={()=>deleteSection(section.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
               </div>
               {!collapsed&&(<div>
-                {(section.files||[]).map((file,fIdx)=>(<div key={file.id} draggable onDragStart={()=>onFileDragStart(section.id,fIdx)} onDragOver={e=>onFileDragOver(e,section.id,fIdx)} onDrop={e=>onFileDrop(e,section.id,fIdx)} onDragEnd={()=>onFileDragEnd(section.id)} style={{ opacity:fileDragState[section.id]===fIdx?0.5:1, outline:fileDragState[section.id]===fIdx?`2px dashed ${C.accent}`:"none" }}><FileRow file={file} color={section.color} depth={0} onDelete={f=>handleDeleteFile(section.id,f,null)} onRename={(f,n)=>handleRenameFile(section.id,f,n,null)} onView={setViewingFile} deleting={deletingFile}/></div>))}
-                {(section.folders||[]).map(folder=>(<FolderTree key={folder.id} folder={folder} sectionId={section.id} sectionColor={section.color} depth={0} onDeleteFile={handleDeleteFile} onRenameFile={handleRenameFile} onViewFile={setViewingFile} onDeleteFolder={handleDeleteFolder} onRenameFolder={handleRenameFolder} onAddSubfolder={handleAddSubfolder} onUpload={openUpload} deletingFile={deletingFile} uploading={uploading} uploadTarget={uploadTarget}/>))}
+                {(section.files||[]).map((file,fIdx)=>(<div key={file.id} draggable onDragStart={()=>onFileDragStart(section.id,fIdx)} onDragOver={e=>onFileDragOver(e,section.id,fIdx)} onDrop={e=>onFileDrop(e,section.id,fIdx)} onDragEnd={()=>onFileDragEnd(section.id)} style={{ opacity:fileDragState[section.id]===fIdx?0.5:1, outline:fileDragState[section.id]===fIdx?`2px dashed ${C.accent}`:"none" }}><FileRow file={file} color={section.color} depth={0} onDelete={f=>handleDeleteFile(section.id,f,null)} onRename={(f,n)=>handleRenameFile(section.id,f,n,null)} onView={f=>setViewingFile({...f,_sectionId:section.id,_folderId:null})} deleting={deletingFile}/></div>))}
+                {(section.folders||[]).map(folder=>(<FolderTree key={folder.id} folder={folder} sectionId={section.id} sectionColor={section.color} depth={0} onDeleteFile={handleDeleteFile} onRenameFile={handleRenameFile} onViewFile={(f,fid)=>setViewingFile({...f,_sectionId:section.id,_folderId:fid})} onDeleteFolder={handleDeleteFolder} onRenameFolder={handleRenameFolder} onAddSubfolder={handleAddSubfolder} onUpload={openUpload} deletingFile={deletingFile} uploading={uploading} uploadTarget={uploadTarget}/>))}
                 {(section.files||[]).length===0&&(section.folders||[]).length===0&&(<div style={{ padding:"14px 20px",fontSize:12,color:C.text3 }}>{"\uD3F4\uB354\uB098 \uD30C\uC77C\uC744 \uCD94\uAC00\uD558\uC138\uC694."}</div>)}
               </div>)}
             </div>
@@ -715,7 +886,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
   return (
     <div>
       <input ref={fileInputRef} type="file" multiple style={{ display:"none" }} onChange={handleFileSelect}/>
-      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)}/>}
+      {viewingFile&&<FileViewer file={viewingFile} onClose={()=>setViewingFile(null)} onRename={async(f,n)=>{if(f.driveId){try{await renameDriveFile(f.driveId,n);}catch(e){console.error(e);}}onChange(certCategories.map(cat=>cat.id!==viewingFile._catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==viewingFile._certId?c:{...c,files:(c.files||[]).map(fi=>fi.id===f.id?{...fi,name:n}:fi)})}));setViewingFile(p=>({...p,name:n}));}}/>}
       <PageHeader title={"\uC790\uACA9\uC99D \uBCF4\uAD00\uD568"} sub={"\uCE74\uD14C\uACE0\uB9AC \u2192 \uC790\uACA9\uC99D \u2192 \uAD00\uB828 \uD30C\uC77C"} action={<Btn icon={Plus} onClick={()=>setShowAddCat(true)}>{"\uCE74\uD14C\uACE0\uB9AC \uCD94\uAC00"}</Btn>}/>
       {certCategories.length===0&&<EmptyState icon={Award} title={"\uCE74\uD14C\uACE0\uB9AC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4"} sub={"\uC5B4\uD559, IT, \uAD6D\uAC00\uC790\uACA9\uC99D \uB4F1"} action={<Btn icon={Plus} onClick={()=>setShowAddCat(true)}>{"\uCE74\uD14C\uACE0\uB9AC \uCD94\uAC00"}</Btn>}/>}
       <div style={{ display:"flex",flexDirection:"column",gap:20 }}>
@@ -766,7 +937,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
                             <span style={{ fontSize:10,color:"rgba(255,255,255,0.5)" }}>{cert.date?formatDate(cert.date):"\uB0A0\uC9DC \uBBF8\uC785\uB825"}</span>
                             {status&&<span style={{ fontSize:10,fontWeight:500,padding:"2px 7px",borderRadius:99,background:status.color+"25",color:status.color }}>{status.text}</span>}
                           </div>
-                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<div key={file.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"6px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)" }}><FileText size={10} color="rgba(255,255,255,0.4)"/><span style={{ flex:1,fontSize:10,color:"rgba(255,255,255,0.55)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span><button onClick={()=>setViewingFile(file)} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.5)",padding:2 }}><Eye size={10}/></button><button onClick={()=>handleDeleteFile(cat.id,cert.id,file)} disabled={deletingFile===file.id} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.4)",padding:2 }}>{deletingFile===file.id?<Loader2 size={10} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={10}/>}</button></div>))}</div>)}
+                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<div key={file.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"6px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)" }}><FileText size={10} color="rgba(255,255,255,0.4)"/><span style={{ flex:1,fontSize:10,color:"rgba(255,255,255,0.55)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span><button onClick={()=>setViewingFile({...file,_catId:cat.id,_certId:cert.id})} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.5)",padding:2 }}><Eye size={10}/></button><button onClick={()=>handleDeleteFile(cat.id,cert.id,file)} disabled={deletingFile===file.id} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.4)",padding:2 }}>{deletingFile===file.id?<Loader2 size={10} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={10}/>}</button></div>))}</div>)}
                           {cert.note&&<div style={{ padding:"6px 16px",fontSize:10,color:"rgba(255,255,255,0.35)",background:"rgba(0,0,0,0.15)" }}>{cert.note}</div>}
                         </div>
                       );
