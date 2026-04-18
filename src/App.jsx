@@ -95,6 +95,20 @@ async function fetchFileBlob(id) {
   if (!r.ok) throw new Error("Fetch failed");
   return r.blob();
 }
+async function saveAnnotation(driveFileId, dataUrl) {
+  const name = `annotation_${driveFileId}.json`;
+  const data = { dataUrl, updatedAt: new Date().toISOString() };
+  const existing = await findFile(name, "appDataFolder");
+  if (existing) { await updateJsonFile(existing.id, data); }
+  else { await createJsonFile(name, data, ["appDataFolder"]); }
+}
+async function loadAnnotation(driveFileId) {
+  const name = `annotation_${driveFileId}.json`;
+  const file = await findFile(name, "appDataFolder");
+  if (!file) return null;
+  const data = await readJsonFile(file.id);
+  return data.dataUrl || null;
+}
 
 // ─── GOOGLE CALENDAR HELPERS ───────────────────────────────
 // CareerKit 전용 캘린더를 만들거나 찾아서 사용
@@ -239,6 +253,120 @@ const S = {
   col:   { display:"flex", flexDirection:"column", gap:6 },
 };
 
+// ─── DRAG & DROP HELPERS ───────────────────────────────────
+function reorder(arr, fromIdx, toIdx) {
+  const a = [...arr];
+  const [item] = a.splice(fromIdx, 1);
+  a.splice(toIdx, 0, item);
+  return a;
+}
+function useDragList(items, onReorder) {
+  const dragIdx = useRef(null);
+  const [overIdx, setOverIdx] = useState(null);
+  function onDragStart(i) { dragIdx.current = i; }
+  function onDragOver(e, i) { e.preventDefault(); setOverIdx(i); }
+  function onDrop(e, i) {
+    e.preventDefault();
+    if (dragIdx.current !== null && dragIdx.current !== i) onReorder(reorder(items, dragIdx.current, i));
+    dragIdx.current = null; setOverIdx(null);
+  }
+  function onDragEnd() { dragIdx.current = null; setOverIdx(null); }
+  return { overIdx, onDragStart, onDragOver, onDrop, onDragEnd };
+}
+
+// ─── ANNOTATION CANVAS ─────────────────────────────────────
+function AnnotationCanvas({ driveFileId }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const [tool, setTool] = useState("pen");
+  const [color, setColor] = useState("#e74c3c");
+  const [size, setSize] = useState(3);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const saveTimer = useRef(null);
+
+  useEffect(() => {
+    if (!driveFileId || !canvasRef.current) return;
+    (async () => {
+      try {
+        const dataUrl = await loadAnnotation(driveFileId);
+        if (!dataUrl) return;
+        const img = new window.Image();
+        img.onload = () => { const ctx = canvasRef.current?.getContext("2d"); if (ctx) ctx.drawImage(img, 0, 0); };
+        img.src = dataUrl;
+      } catch(e) { console.error(e); }
+    })();
+  }, [driveFileId]);
+
+  function getPos(e) {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+    const src = e.touches ? e.touches[0] : e;
+    return { x: (src.clientX - rect.left) * sx, y: (src.clientY - rect.top) * sy };
+  }
+  function startDraw(e) {
+    e.preventDefault(); drawing.current = true;
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e); ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+  }
+  function draw(e) {
+    e.preventDefault(); if (!drawing.current) return;
+    const canvas = canvasRef.current, ctx = canvas.getContext("2d");
+    const pos = getPos(e);
+    ctx.lineWidth = tool === "eraser" ? size * 6 : size;
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = color;
+    ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+    ctx.lineTo(pos.x, pos.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+    setDirty(true);
+  }
+  function endDraw(e) {
+    if (!drawing.current) return; drawing.current = false;
+    canvasRef.current.getContext("2d").beginPath();
+    if (!driveFileId) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      setSaving(true);
+      try { await saveAnnotation(driveFileId, canvasRef.current.toDataURL("image/png")); setDirty(false); }
+      catch(e) { console.error(e); } finally { setSaving(false); }
+    }, 1500);
+  }
+  function clearCanvas() {
+    const c = canvasRef.current; c.getContext("2d").clearRect(0, 0, c.width, c.height); setDirty(true);
+  }
+  const COLORS = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#3498db","#9b59b6","#ffffff","#000000"];
+  return (
+    <div style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+      {/* Toolbar */}
+      <div style={{ position:"absolute", top:8, right:8, zIndex:10, pointerEvents:"all" }}>
+        <div style={{ background:"rgba(15,21,33,0.92)", borderRadius:12, padding:"8px 6px", display:"flex", flexDirection:"column", gap:5, border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 4px 20px rgba(0,0,0,0.4)" }}>
+          <button onClick={()=>setTool("pen")} title="\uD39C" style={{ background:tool==="pen"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}><Pencil size={14}/></button>
+          <button onClick={()=>setTool("eraser")} title="\uC9C0\uC6B0\uAC1C" style={{ background:tool==="eraser"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}><X size={14}/></button>
+          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+          <input type="range" min={1} max={20} value={size} onChange={e=>setSize(Number(e.target.value))}
+            style={{ width:14, height:70, writingMode:"vertical-lr", direction:"rtl", cursor:"pointer", accentColor:C.accent }}/>
+          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+          {COLORS.map(col=>(
+            <button key={col} onClick={()=>{setTool("pen");setColor(col);}}
+              style={{ width:20, height:20, borderRadius:"50%", background:col, border: color===col&&tool==="pen"?"2px solid white":"2px solid rgba(255,255,255,0.2)", cursor:"pointer", flexShrink:0 }}/>
+          ))}
+          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+          <button onClick={clearCanvas} title="\uC804\uCCB4 \uC9C0\uC6B0\uAE30" style={{ background:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:C.danger }}><Trash2 size={14}/></button>
+          {saving && <Loader2 size={14} color={C.accent} style={{ animation:"spin 1s linear infinite", margin:"0 auto" }}/>}
+          {dirty && !saving && <div style={{ width:6, height:6, borderRadius:"50%", background:C.warning, margin:"0 auto" }}/>}
+        </div>
+      </div>
+      {/* Canvas overlay */}
+      <canvas ref={canvasRef} width={1200} height={1600}
+        style={{ position:"absolute", inset:0, width:"100%", height:"100%", cursor:tool==="eraser"?"cell":"crosshair", pointerEvents:"all", touchAction:"none" }}
+        onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+        onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}/>
+    </div>
+  );
+}
+
 // ─── FILE VIEWER ───────────────────────────────────────────
 function FileViewer({ file, onClose }) {
   const [state, setState] = useState("loading");
@@ -274,19 +402,19 @@ function FileViewer({ file, onClose }) {
         {state==="error"&&<div style={{ textAlign:"center" }}><p style={{ fontSize:14,color:C.danger,marginBottom:8 }}>{"\uD30C\uC77C\uC744 \uBD88\uB7EC\uC62C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."}</p>{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ fontSize:13,color:C.accent }}>Drive{"\uC5D0\uC11C \uC5F4\uAE30"}</a>}</div>}
         {state==="no-drive"&&<p style={{ fontSize:14,color:C.text2 }}>{"\uB85C\uCEEC \uD30C\uC77C\uC785\uB2C8\uB2E4."}</p>}
         {state==="image"&&<img src={blobUrl} alt={file.name} style={{ maxWidth:"100%",maxHeight:"100%",borderRadius:12,boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}/>}
-        {state==="pdf"&&<iframe src={blobUrl} title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8 }}/>}
+        {state==="pdf"&&(
+          <div style={{ position:"relative", width:"100%", height:"100%" }}>
+            <iframe src={blobUrl} title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8 }}/>
+            <AnnotationCanvas driveFileId={file.driveId}/>
+          </div>
+        )}
         {state==="text"&&<div style={{ width:"100%",maxWidth:800,background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border2}` }}><pre style={{ fontSize:12,color:C.text2,lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word",overflowY:"auto",maxHeight:"70vh" }}>{textContent}</pre></div>}
         {state==="html"&&(
-          <div style={{ width:"100%", height:"100%", display:"flex", flexDirection:"column", gap:12 }}>
-          {/* 샌드박스된 iframe으로 렌더링 */}
-          <iframe
-          srcDoc={textContent}
-          sandbox="allow-scripts"
-          title={file.name}
-          style={{ flex:1, border:"none", borderRadius:8, background:"white" }}
-          />
-       </div>
-)}
+          <div style={{ position:"relative", width:"100%", height:"100%" }}>
+            <iframe srcDoc={textContent} sandbox="allow-scripts" title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8,background:"white" }}/>
+            <AnnotationCanvas driveFileId={file.driveId}/>
+          </div>
+        )}
         {state==="other"&&<div style={{ textAlign:"center" }}><div style={{ borderRadius:20,padding:24,background:C.surface2,display:"inline-flex",marginBottom:16 }}><File size={40} color={C.text3}/></div><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>{"\uC774 \uD615\uC2DD\uC740 \uBDF0\uC5B4\uC5D0\uC11C \uC9C1\uC811 \uBCF4\uAE30\uAC00 \uBD88\uAC00\uB2A5\uD569\uB2C8\uB2E4."}</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>{"\uB2E4\uC6B4\uB85C\uB4DC"}</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive{"\uC5D0\uC11C \uC5F4\uAE30"}</a>}</div></div>}
       </div>
     </div>
@@ -478,6 +606,31 @@ function Library({ library, onChange, driveFolderId }) {
   function handleRenameFolder(sid,fid,name){onChange(library.map(s=>{if(s.id!==sid)return s;return{...s,folders:updateFolderInTree(s.folders||[],fid,f=>({...f,name}))};}));}
 
   function openUpload(sid,fid=null){setUploadTarget({sectionId:sid,folderId:fid});setTimeout(()=>fileInputRef.current?.click(),50);}
+
+  // drag state for sections
+  const sectionDrag = useDragList(library, onChange);
+  // drag state for root files per section (keyed by sectionId)
+  const fileDragRefs = useRef({});
+  function getFileDrag(sectionId) {
+    if (!fileDragRefs.current[sectionId]) {
+      fileDragRefs.current[sectionId] = { dragIdx: null, overIdx: null };
+    }
+    return fileDragRefs.current[sectionId];
+  }
+  const [fileDragState, setFileDragState] = useState({});
+  function onFileDragStart(sectionId, i) { fileDragRefs.current[sectionId] = { dragIdx: i, overIdx: null }; }
+  function onFileDragOver(e, sectionId, i) { e.preventDefault(); fileDragRefs.current[sectionId] = { ...fileDragRefs.current[sectionId], overIdx: i }; setFileDragState(p=>({...p,[sectionId]:i})); }
+  function onFileDrop(e, sectionId, i) {
+    e.preventDefault();
+    const ref = fileDragRefs.current[sectionId] || {};
+    if (ref.dragIdx !== null && ref.dragIdx !== undefined && ref.dragIdx !== i) {
+      const section = library.find(s=>s.id===sectionId);
+      if (section) onChange(library.map(s=>s.id!==sectionId?s:{...s,files:reorder(s.files||[],ref.dragIdx,i)}));
+    }
+    fileDragRefs.current[sectionId] = { dragIdx: null, overIdx: null };
+    setFileDragState(p=>({...p,[sectionId]:null}));
+  }
+  function onFileDragEnd(sectionId) { fileDragRefs.current[sectionId] = { dragIdx: null, overIdx: null }; setFileDragState(p=>({...p,[sectionId]:null})); }
   async function handleFileSelect(e){
     const files=Array.from(e.target.files);if(!files.length||!driveFolderId||!uploadTarget)return;
     setUploading(true);
@@ -495,10 +648,16 @@ function Library({ library, onChange, driveFolderId }) {
       <PageHeader title={"\uAC15\uC758 \uC790\uB8CC\uC2E4"} sub={"\uC139\uC158 \u2192 \uD3F4\uB354(\uC911\uCCA9) \u2192 \uD30C\uC77C"} action={<Btn icon={Plus} onClick={()=>setShowAddSection(true)}>{"\uC0C8 \uC139\uC158"}</Btn>}/>
       {library.length===0&&<EmptyState icon={FolderOpen} title={"\uAC15\uC758 \uC139\uC158\uC774 \uC5C6\uC2B5\uB2C8\uB2E4"} action={<Btn icon={Plus} onClick={()=>setShowAddSection(true)}>{"\uC139\uC158 \uCD94\uAC00"}</Btn>}/>}
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        {library.map(section=>{
+        {library.map((section,sIdx)=>{
           const collapsed=collapsedSections[section.id];
           return (
-            <div key={section.id} style={{ ...S.card,overflow:"hidden" }}>
+            <div key={section.id}
+              draggable
+              onDragStart={()=>sectionDrag.onDragStart(sIdx)}
+              onDragOver={e=>sectionDrag.onDragOver(e,sIdx)}
+              onDrop={e=>sectionDrag.onDrop(e,sIdx)}
+              onDragEnd={sectionDrag.onDragEnd}
+              style={{ ...S.card,overflow:"hidden", opacity: sectionDrag.overIdx===sIdx&&sectionDrag.overIdx!==null?0.6:1, outline: sectionDrag.overIdx===sIdx?"2px dashed "+C.accent:"none" }}>
               <div style={{ display:"flex",alignItems:"center",gap:10,padding:"14px 20px",borderLeft:`3px solid ${section.color}`,background:C.surface,borderBottom:`1px solid ${C.border}` }}>
                 <button onClick={()=>setCollapsedSections(p=>({...p,[section.id]:!p[section.id]}))} style={{ background:"transparent",border:"none",cursor:"pointer",padding:2,color:C.text3,display:"flex" }}>{collapsed?<CR size={13}/>:<ChevronDown size={13}/>}</button>
                 {editSectionId===section.id?(<input autoFocus value={editSectionName} onChange={e=>setEditSectionName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveSectionEdit(section.id);if(e.key==="Escape")setEditSectionId(null);}} style={{ flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${section.color}`,color:C.text1,fontSize:13,fontWeight:600,outline:"none",fontFamily:"inherit" }}/>):(<span style={{ flex:1,fontSize:13,fontWeight:600,color:C.text1 }}>{section.subject}</span>)}
@@ -508,7 +667,7 @@ function Library({ library, onChange, driveFolderId }) {
                 <button onClick={()=>deleteSection(section.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
               </div>
               {!collapsed&&(<div>
-                {(section.files||[]).map(file=>(<FileRow key={file.id} file={file} color={section.color} depth={0} onDelete={f=>handleDeleteFile(section.id,f,null)} onRename={(f,n)=>handleRenameFile(section.id,f,n,null)} onView={setViewingFile} deleting={deletingFile}/>))}
+                {(section.files||[]).map((file,fIdx)=>(<div key={file.id} draggable onDragStart={()=>onFileDragStart(section.id,fIdx)} onDragOver={e=>onFileDragOver(e,section.id,fIdx)} onDrop={e=>onFileDrop(e,section.id,fIdx)} onDragEnd={()=>onFileDragEnd(section.id)} style={{ opacity:fileDragState[section.id]===fIdx?0.5:1, outline:fileDragState[section.id]===fIdx?`2px dashed ${C.accent}`:"none" }}><FileRow file={file} color={section.color} depth={0} onDelete={f=>handleDeleteFile(section.id,f,null)} onRename={(f,n)=>handleRenameFile(section.id,f,n,null)} onView={setViewingFile} deleting={deletingFile}/></div>))}
                 {(section.folders||[]).map(folder=>(<FolderTree key={folder.id} folder={folder} sectionId={section.id} sectionColor={section.color} depth={0} onDeleteFile={handleDeleteFile} onRenameFile={handleRenameFile} onViewFile={setViewingFile} onDeleteFolder={handleDeleteFolder} onRenameFolder={handleRenameFolder} onAddSubfolder={handleAddSubfolder} onUpload={openUpload} deletingFile={deletingFile} uploading={uploading} uploadTarget={uploadTarget}/>))}
                 {(section.files||[]).length===0&&(section.folders||[]).length===0&&(<div style={{ padding:"14px 20px",fontSize:12,color:C.text3 }}>{"\uD3F4\uB354\uB098 \uD30C\uC77C\uC744 \uCD94\uAC00\uD558\uC138\uC694."}</div>)}
               </div>)}
@@ -545,6 +704,13 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
   async function handleFileSelect(e){const files=Array.from(e.target.files);if(!files.length||!driveFolderId)return;const{catId,certId}=uploadTargetRef.current;setUploadingCert(certId);try{const uploaded=await Promise.all(files.map(f=>uploadFileToDrive(f,driveFolderId)));const newFiles=uploaded.map(r=>({id:uid(),driveId:r.id,name:r.name,size:formatBytes(r.size),date:today(),webViewLink:r.webViewLink}));onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,files:[...(c.files||[]),...newFiles]})}));}catch(err){alert("\uC5C5\uB85C\uB4DC \uC2E4\uD328: "+err.message);}finally{setUploadingCert(null);uploadTargetRef.current=null;if(fileInputRef.current)fileInputRef.current.value="";}}
   async function handleDeleteFile(catId,certId,file){setDeletingFile(file.id);try{if(file.driveId)await deleteDriveFile(file.driveId);onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,files:(c.files||[]).filter(f=>f.id!==file.id)})}));}catch(e){console.error(e);}finally{setDeletingFile(null);}}
   function expiryStatus(expiry){if(!expiry)return null;const d=diffDays(expiry);if(d<0)return{text:"\uB9CC\uB8CC\uB428",color:C.danger};if(d<90)return{text:`${d}\uC77C \uD6C4 \uB9CC\uB8CC`,color:C.warning};return{text:"\uC720\uD6A8",color:C.success};}
+  const catDrag = useDragList(certCategories, onChange);
+  const certDragRefs = useRef({});
+  const [certDragState, setCertDragState] = useState({});
+  function onCertDragStart(catId,i){certDragRefs.current[catId]={dragIdx:i,overIdx:null};}
+  function onCertDragOver(e,catId,i){e.preventDefault();certDragRefs.current[catId]={...certDragRefs.current[catId],overIdx:i};setCertDragState(p=>({...p,[catId]:i}));}
+  function onCertDrop(e,catId,i){e.preventDefault();const ref=certDragRefs.current[catId]||{};if(ref.dragIdx!==null&&ref.dragIdx!==undefined&&ref.dragIdx!==i){onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:reorder(cat.certs||[],ref.dragIdx,i)}));}certDragRefs.current[catId]={dragIdx:null,overIdx:null};setCertDragState(p=>({...p,[catId]:null}));}
+  function onCertDragEnd(catId){certDragRefs.current[catId]={dragIdx:null,overIdx:null};setCertDragState(p=>({...p,[catId]:null}));}
 
   return (
     <div>
@@ -553,10 +719,16 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
       <PageHeader title={"\uC790\uACA9\uC99D \uBCF4\uAD00\uD568"} sub={"\uCE74\uD14C\uACE0\uB9AC \u2192 \uC790\uACA9\uC99D \u2192 \uAD00\uB828 \uD30C\uC77C"} action={<Btn icon={Plus} onClick={()=>setShowAddCat(true)}>{"\uCE74\uD14C\uACE0\uB9AC \uCD94\uAC00"}</Btn>}/>
       {certCategories.length===0&&<EmptyState icon={Award} title={"\uCE74\uD14C\uACE0\uB9AC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4"} sub={"\uC5B4\uD559, IT, \uAD6D\uAC00\uC790\uACA9\uC99D \uB4F1"} action={<Btn icon={Plus} onClick={()=>setShowAddCat(true)}>{"\uCE74\uD14C\uACE0\uB9AC \uCD94\uAC00"}</Btn>}/>}
       <div style={{ display:"flex",flexDirection:"column",gap:20 }}>
-        {certCategories.map(cat=>{
+        {certCategories.map((cat,catIdx)=>{
           const collapsed=collapsedCats[cat.id];
           return (
-            <div key={cat.id} style={{ ...S.card,overflow:"hidden" }}>
+            <div key={cat.id}
+              draggable
+              onDragStart={()=>catDrag.onDragStart(catIdx)}
+              onDragOver={e=>catDrag.onDragOver(e,catIdx)}
+              onDrop={e=>catDrag.onDrop(e,catIdx)}
+              onDragEnd={catDrag.onDragEnd}
+              style={{ ...S.card,overflow:"hidden", opacity:catDrag.overIdx===catIdx?0.6:1, outline:catDrag.overIdx===catIdx?"2px dashed "+C.accent:"none" }}>
               <div style={{ display:"flex",alignItems:"center",gap:10,padding:"14px 20px",borderBottom:`1px solid ${C.border}`,borderLeft:`3px solid ${cat.color}`,background:C.surface }}>
                 <button onClick={()=>setCollapsedCats(p=>({...p,[cat.id]:!p[cat.id]}))} style={{ background:"transparent",border:"none",cursor:"pointer",padding:2,color:C.text3,display:"flex" }}>{collapsed?<CR size={13}/>:<ChevronDown size={13}/>}</button>
                 <div style={{ width:10,height:10,borderRadius:"50%",background:cat.color,flexShrink:0 }}/>
@@ -568,10 +740,16 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
               {!collapsed&&(<div style={{ padding:16 }}>
                 {(cat.certs||[]).length===0?(<div style={{ fontSize:12,color:C.text3,padding:"8px 4px" }}>{"\uC790\uACA9\uC99D\uC744 \uCD94\uAC00\uD558\uC138\uC694."}</div>):(
                   <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12 }}>
-                    {(cat.certs||[]).map(cert=>{
+                    {(cat.certs||[]).map((cert,certIdx)=>{
                       const status=expiryStatus(cert.expiry);
                       return (
-                        <div key={cert.id} style={{ borderRadius:14,overflow:"hidden",background:cert.color,border:`1px solid ${cert.color}88` }}>
+                        <div key={cert.id}
+                          draggable
+                          onDragStart={()=>onCertDragStart(cat.id,certIdx)}
+                          onDragOver={e=>onCertDragOver(e,cat.id,certIdx)}
+                          onDrop={e=>onCertDrop(e,cat.id,certIdx)}
+                          onDragEnd={()=>onCertDragEnd(cat.id)}
+                          style={{ borderRadius:14,overflow:"hidden",background:cert.color,border:`1px solid ${cert.color}88`, opacity:certDragState[cat.id]===certIdx?0.5:1, outline:certDragState[cat.id]===certIdx?`2px dashed ${C.accent}`:"none", cursor:"grab" }}>
                           <div style={{ padding:16 }}>
                             <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12 }}>
                               <div style={{ borderRadius:10,padding:8,background:"rgba(255,255,255,0.12)" }}><Award size={16} color="rgba(255,255,255,0.9)"/></div>
