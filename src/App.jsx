@@ -369,64 +369,72 @@ function AnnotationCanvas({ driveFileId }) {
   }
 
   // ── 그리기 이벤트 ──
-  // pointerdown: S펜 배럴 버튼(button===2) 감지 → 임시 지우개
+  // 핵심 원칙:
+  //   - pointerType === "pen"  → 그리기 처리, preventDefault로 스크롤 차단
+  //   - pointerType === "touch" → 아무것도 안 함, 브라우저 스크롤 통과
+  //   - 배럴 버튼(buttons & 2) 누른 채로 펜 닿으면 → 임시 지우개
   function onPointerDown(e) {
-  if (!drawMode) return;
+    // 손가락이면 완전히 무시 (스크롤 허용)
+    if (e.pointerType !== "pen") return;
+    // drawMode 꺼져 있고 배럴 버튼도 없으면 무시
+    const isBarrel = (e.buttons & 2) !== 0;
+    if (!drawMode && !isBarrel) return;
 
-  // 👉 손가락이면 그냥 통과 (스크롤 허용)
-  if (e.pointerType !== "pen") return;
+    e.preventDefault();
 
-  // 여기부터 펜만 처리
-  if (e.button === 2 || (e.buttons & 2)) {
-    sPenTemp.current = true;
-    toolRef.current = "eraser";
+    // 배럴 버튼 → 임시 지우개
+    if (isBarrel) {
+      sPenTemp.current = true;
+      toolRef.current = "eraser";
+    }
+
+    pushUndo();
+    drawing.current = true;
+    canvasRef.current.setPointerCapture(e.pointerId);
+
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    // 선 스타일 초기화
+    const currentTool = toolRef.current;
+    ctx.lineWidth  = currentTool === "eraser" ? sizeRef.current * 6 : sizeRef.current;
+    ctx.lineCap    = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = colorRef.current;
+    ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
   }
 
-  e.preventDefault(); // ← 이제 펜일 때만 실행됨
-
-  pushUndo();
-  drawing.current = true;
-
-  const ctx = canvasRef.current.getContext("2d");
-  const pos = getPos(e);
-  ctx.beginPath();
-  ctx.moveTo(pos.x, pos.y);
-
-  canvasRef.current.releasePointerCapture(e.pointerId);
-}
-  //여기까지 챗gpt
   function onPointerMove(e) {
-  if (!drawing.current) return;
+    if (e.pointerType !== "pen" || !drawing.current) return;
+    e.preventDefault();
 
-  // 👉 손가락은 무시
-  if (e.pointerType !== "pen") return;
-
-  e.preventDefault();
-
-  const ctx = canvasRef.current.getContext("2d");
-  const pos = getPos(e);
-  ctx.lineTo(pos.x, pos.y);
-  ctx.stroke();
-}
+    const canvas = canvasRef.current, ctx = canvas.getContext("2d");
+    const currentTool = toolRef.current;
+    const pos = getPos(e);
+    ctx.lineWidth  = currentTool === "eraser" ? sizeRef.current * 6 : sizeRef.current;
+    ctx.lineCap    = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = colorRef.current;
+    ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+  }
 
   function onPointerUp(e) {
-  if (!drawing.current) return;
+    if (e.pointerType !== "pen" || !drawing.current) return;
+    drawing.current = false;
+    canvasRef.current.getContext("2d").beginPath();
 
-  drawing.current = false;
-  canvasRef.current.getContext("2d").beginPath();
+    // 배럴 버튼이 완전히 떼졌으면 원래 도구로 복원
+    if (sPenTemp.current && (e.buttons & 2) === 0) {
+      sPenTemp.current = false;
+      toolRef.current = tool;
+      _setTool(tool);
+    }
 
-  // 버튼이 실제로 다 떼졌는지 확인
-  const stillPressing = (e.buttons & 2) !== 0;
-
-  if (sPenTemp.current && !stillPressing) {
-    sPenTemp.current = false;
-    toolRef.current = tool;
-    _setTool(tool);
+    scheduleSaveDirty();
   }
-
-  scheduleSaveDirty();
-}
-// 여기까지도 챗지피티
   function clearCanvas() {
     pushUndo();
     const c = canvasRef.current;
@@ -505,13 +513,15 @@ function AnnotationCanvas({ driveFileId }) {
         </div>
       )}
 
-      {/* 캔버스 — drawMode일 때만 pointerEvents 활성화 */}
+      {/* 캔버스 — 항상 pointerEvents:all, touchAction:auto 유지
+          손가락 스크롤은 핸들러에서 pen만 처리하므로 자동으로 통과됨
+          drawMode 꺼져 있을 때도 배럴 버튼 지우개 작동 */}
       <canvas ref={canvasRef} width={1200} height={1600}
         style={{
           position:"absolute", inset:0, width:"100%", height:"100%",
           cursor: drawMode ? (activeTool==="eraser" ? "cell" : "crosshair") : "default",
-          pointerEvents: drawMode ? "all" : "none",
-          touchAction: drawMode ? "none" : "auto",
+          pointerEvents: "all",
+          touchAction: "auto",  // ← 손가락 스크롤 허용
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
