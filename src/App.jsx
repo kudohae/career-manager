@@ -392,7 +392,7 @@ function AnnotationCanvas({ driveFileId }) {
   ctx.beginPath();
   ctx.moveTo(pos.x, pos.y);
 
-  canvasRef.current.setPointerCapture(e.pointerId);
+  canvasRef.current.releasePointerCapture(e.pointerId);
 }
   //여기까지 챗gpt
   function onPointerMove(e) {
@@ -511,7 +511,7 @@ function AnnotationCanvas({ driveFileId }) {
           position:"absolute", inset:0, width:"100%", height:"100%",
           cursor: drawMode ? (activeTool==="eraser" ? "cell" : "crosshair") : "default",
           pointerEvents: drawMode ? "all" : "none",
-          touchAction: drawMode ? "pan-y" : "auto",
+          touchAction: drawMode ? "none" : "auto",
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
