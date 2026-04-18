@@ -371,20 +371,35 @@ function AnnotationCanvas({ driveFileId }) {
   // ── 그리기 이벤트 ──
   // pointerdown: S펜 배럴 버튼(button===2) 감지 → 임시 지우개
   function onPointerDown(e) {
-    if (!drawMode) return;
-    if (e.pointerType === "pen" && e.button === 2) {
-      sPenTemp.current = true;
-      toolRef.current = "eraser";
-    }
-    e.preventDefault();
-    pushUndo();
-    drawing.current = true;
-    const ctx = canvasRef.current.getContext("2d");
-    const pos = getPos(e);
-    ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
-    canvasRef.current.setPointerCapture(e.pointerId);
+  if (!drawMode) return;
+
+  const isPen = e.pointerType === "pen";
+
+  // 여러 케이스 대응
+  const isBarrel =
+    isPen && (
+      e.button === 2 ||
+      e.button === 5 ||
+      (e.buttons & 2) !== 0
+    );
+
+  if (isBarrel) {
+    sPenTemp.current = true;
+    toolRef.current = "eraser";
   }
 
+  e.preventDefault();
+  pushUndo();
+  drawing.current = true;
+
+  const ctx = canvasRef.current.getContext("2d");
+  const pos = getPos(e);
+  ctx.beginPath();
+  ctx.moveTo(pos.x, pos.y);
+
+  canvasRef.current.setPointerCapture(e.pointerId);
+}
+  //여기까지 챗gpt
   function onPointerMove(e) {
     if (!drawMode || !drawing.current) return;
     e.preventDefault();
