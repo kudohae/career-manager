@@ -6,7 +6,7 @@ import {
   GraduationCap, Zap, LogOut, Cloud, RefreshCw,
   Eye, Loader2, Menu, ChevronDown, ChevronRight as CR,
   Download, Pencil, ExternalLink, CalendarPlus, CalendarCheck,
-  MoveRight
+  MoveRight, Search, Bell, TrendingUp, Star
 } from "lucide-react";
 
 // ─── GOOGLE API ────────────────────────────────────────────
@@ -183,6 +183,40 @@ const S = {
   col:   { display:"flex", flexDirection:"column", gap:6 },
 };
 
+// ─── TOAST SYSTEM ──────────────────────────────────────────
+const _toastBus = [];
+function addToast(type, msg, duration = 3500) {
+  const t = { id: uid(), type, msg, duration };
+  _toastBus.forEach(fn => fn(t));
+}
+function ToastContainer() {
+  const [toasts, setToasts] = useState([]);
+  useEffect(() => {
+    function handler(t) {
+      setToasts(prev => [...prev, t]);
+      setTimeout(() => setToasts(prev => prev.filter(x => x.id !== t.id)), t.duration);
+    }
+    _toastBus.push(handler);
+    return () => { const i = _toastBus.indexOf(handler); if (i >= 0) _toastBus.splice(i, 1); };
+  }, []);
+  if (!toasts.length) return null;
+  const clr = { success:C.success, error:C.danger, info:C.accent, warning:C.warning };
+  return (
+    <div style={{ position:"fixed",bottom:24,right:24,zIndex:300,display:"flex",flexDirection:"column-reverse",gap:8,pointerEvents:"none" }}>
+      {toasts.map(t => (
+        <div key={t.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"12px 16px",borderRadius:12,maxWidth:340,minWidth:220,
+          background:C.surface2,border:`1px solid ${clr[t.type]}40`,
+          boxShadow:"0 8px 32px rgba(0,0,0,0.5)",pointerEvents:"all",
+          animation:"toastIn 0.25s cubic-bezier(.21,1.02,.73,1) both" }}>
+          <div style={{ width:8,height:8,borderRadius:"50%",background:clr[t.type],flexShrink:0 }}/>
+          <span style={{ fontSize:13,color:C.text1,lineHeight:1.4,flex:1 }}>{t.msg}</span>
+          <button onClick={()=>setToasts(p=>p.filter(x=>x.id!==t.id))} style={{ background:"transparent",border:"none",cursor:"pointer",padding:2,color:C.text3,display:"flex",flexShrink:0 }}><X size={12}/></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── DRAG & DROP HELPERS ───────────────────────────────────
 function reorder(arr, fromIdx, toIdx) {
   const a = [...arr];
@@ -348,6 +382,15 @@ function Dashboard({ library, certCategories, events, setPage, userInfo }) {
   const totalCerts = certCategories.reduce((a,c)=>a+(c.certs||[]).length,0);
   const nextExam   = events.filter(e=>e.isDday&&diffDays(e.date)>=0).sort((a,b)=>diffDays(a.date)-diffDays(b.date))[0];
   const upcoming   = [...events].filter(e=>diffDays(e.date)>=0).sort((a,b)=>new Date(a.date)-new Date(b.date)).slice(0,5);
+  const expiringCerts = useMemo(() => {
+    const results = [];
+    certCategories.forEach(cat => (cat.certs||[]).forEach(cert => {
+      if (!cert.expiry) return;
+      const d = diffDays(cert.expiry);
+      if (d >= 0 && d <= 90) results.push({ ...cert, _catName:cat.name, _daysLeft:d });
+    }));
+    return results.sort((a,b)=>a._daysLeft-b._daysLeft);
+  }, [certCategories]);
   const stats = [
     { icon:BookOpen, label:"강의 섹션",       value:library.length, color:"#818cf8", page:"library" },
     { icon:FileText, label:"학습 자료",       value:totalFiles,     color:"#38bdf8", page:"library" },
@@ -381,6 +424,26 @@ function Dashboard({ library, certCategories, events, setPage, userInfo }) {
           {upcoming.length?(<div style={{ display:"flex",flexDirection:"column",gap:8 }}>{upcoming.map(e=>(<div key={e.id} style={{ display:"flex",alignItems:"center",gap:8 }}><div style={{ width:6,height:6,borderRadius:"50%",background:EVENT_TYPES[e.type]?.color,flexShrink:0 }}/><span style={{ fontSize:12,flex:1,color:C.text2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.title}</span><span style={{ fontSize:11,color:C.text3,flexShrink:0 }}>{formatDate(e.date)}</span></div>))}</div>):<p style={{ fontSize:13,color:C.text2 }}>예정된 일정이 없습니다.</p>}
         </div>
       </div>
+      {expiringCerts.length > 0 && (
+        <div style={{ ...S.card,padding:20,marginTop:16 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:16 }}><Bell size={13} color={C.warning}/><span style={{ fontSize:13,fontWeight:600,color:C.text1 }}>자격증 만료 임박</span><span style={{ fontSize:11,color:C.text3,marginLeft:4 }}>90일 이내</span></div>
+          <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+            {expiringCerts.map(cert => {
+              const urgentColor = cert._daysLeft <= 30 ? C.danger : cert._daysLeft <= 60 ? C.warning : C.accent;
+              return (
+                <div key={cert.id} onClick={()=>setPage("certs")} style={{ display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderRadius:10,background:urgentColor+"10",border:`1px solid ${urgentColor}25`,cursor:"pointer" }}>
+                  <Award size={12} color={urgentColor} style={{ flexShrink:0 }}/>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontSize:12,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{cert.name}</div>
+                    <div style={{ fontSize:10,color:C.text3,marginTop:1 }}>{cert._catName} · {formatDate(cert.expiry)}</div>
+                  </div>
+                  <span style={{ fontSize:11,fontWeight:700,color:urgentColor,flexShrink:0 }}>{cert._daysLeft === 0 ? "오늘 만료" : `D-${cert._daysLeft}`}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -620,7 +683,7 @@ function Library({ library, onChange, driveFolderId }) {
         if(!folderId)return{...s,files:[...(s.files||[]),...newFiles]};
         return{...s,folders:updateFolderInTree(s.folders||[],folderId,f=>({...f,files:[...(f.files||[]),...newFiles]}))};
       }));
-    }catch(err){alert("업로드 실패: "+err.message);}
+    }catch(err){addToast("error","업로드 실패: "+err.message);}
     finally{setUploading(false);setUploadTarget(null);if(fileInputRef.current)fileInputRef.current.value="";}
   }
 
@@ -764,6 +827,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
   const [uploadingCert, setUploadingCert] = useState(null);
   const [deletingFile, setDeletingFile] = useState(null);
   const [viewingFile, setViewingFile] = useState(null);
+  const [editCertTarget, setEditCertTarget] = useState(null); // { catId, certId }
   const fileInputRef = useRef(null);
   const uploadTargetRef = useRef(null);
   const cf = k=>e=>setCertForm(p=>({...p,[k]:e.target.value}));
@@ -772,8 +836,9 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
   function deleteCategory(id){onChange(certCategories.filter(c=>c.id!==id));setConfirmDelete(null);}
   function addCert(catId){if(!certForm.name.trim())return;onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:[...(cat.certs||[]),{...certForm,id:uid(),files:[]}]}));setCertForm({name:"",issuer:"",date:"",expiry:"",score:"",note:"",color:CERT_COLORS[0]});setShowAddCert(null);}
   function deleteCert(catId,certId){onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).filter(c=>c.id!==certId)}));setConfirmDelete(null);}
+  function updateCert(catId,certId){if(!certForm.name.trim())return;onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,...certForm})}));setEditCertTarget(null);addToast("success","자격증이 수정되었습니다.");}
   function openUpload(catId,certId){uploadTargetRef.current={catId,certId};setTimeout(()=>fileInputRef.current?.click(),50);}
-  async function handleFileSelect(e){const files=Array.from(e.target.files);if(!files.length||!driveFolderId)return;const{catId,certId}=uploadTargetRef.current;setUploadingCert(certId);try{const uploaded=await Promise.all(files.map(f=>uploadFileToDrive(f,driveFolderId)));const newFiles=uploaded.map(r=>({id:uid(),driveId:r.id,name:r.name,size:formatBytes(r.size),date:today(),webViewLink:r.webViewLink}));onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,files:[...(c.files||[]),...newFiles]})}));}catch(err){alert("업로드 실패: "+err.message);}finally{setUploadingCert(null);uploadTargetRef.current=null;if(fileInputRef.current)fileInputRef.current.value="";}}
+  async function handleFileSelect(e){const files=Array.from(e.target.files);if(!files.length||!driveFolderId)return;const{catId,certId}=uploadTargetRef.current;setUploadingCert(certId);try{const uploaded=await Promise.all(files.map(f=>uploadFileToDrive(f,driveFolderId)));const newFiles=uploaded.map(r=>({id:uid(),driveId:r.id,name:r.name,size:formatBytes(r.size),date:today(),webViewLink:r.webViewLink}));onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,files:[...(c.files||[]),...newFiles]})}));}catch(err){addToast("error","업로드 실패: "+err.message);}finally{setUploadingCert(null);uploadTargetRef.current=null;if(fileInputRef.current)fileInputRef.current.value="";}}
   async function handleDeleteFile(catId,certId,file){setDeletingFile(file.id);try{if(file.driveId)await deleteDriveFile(file.driveId);onChange(certCategories.map(cat=>cat.id!==catId?cat:{...cat,certs:(cat.certs||[]).map(c=>c.id!==certId?c:{...c,files:(c.files||[]).filter(f=>f.id!==file.id)})}));}catch(e){console.error(e);}finally{setDeletingFile(null);}}
   function expiryStatus(expiry){if(!expiry)return null;const d=diffDays(expiry);if(d<0)return{text:"만료됨",color:C.danger};if(d<90)return{text:`${d}일 후 만료`,color:C.warning};return{text:"유효",color:C.success};}
   const catDrag = useDragList(certCategories, onChange);
@@ -826,8 +891,9 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
                             <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12 }}>
                               <div style={{ borderRadius:10,padding:8,background:"rgba(255,255,255,0.12)" }}><Award size={16} color="rgba(255,255,255,0.9)"/></div>
                               <div style={{ display:"flex",gap:4 }}>
-                                <button onClick={()=>openUpload(cat.id,cert.id)} disabled={uploadingCert===cert.id} style={{ background:"rgba(255,255,255,0.15)",border:"none",cursor:"pointer",padding:5,borderRadius:7,display:"flex",color:"rgba(255,255,255,0.8)" }}>{uploadingCert===cert.id?<Loader2 size={11} style={{ animation:"spin 1s linear infinite" }}/>:<Upload size={11}/>}</button>
-                                <button onClick={()=>setConfirmDelete({type:"cert",catId:cat.id,certId:cert.id})} style={{ background:"rgba(255,255,255,0.15)",border:"none",cursor:"pointer",padding:5,borderRadius:7,display:"flex",color:"rgba(255,255,255,0.8)" }}><Trash2 size={11}/></button>
+                                <button onClick={()=>openUpload(cat.id,cert.id)} disabled={uploadingCert===cert.id} title="파일 첨부" style={{ background:"rgba(255,255,255,0.15)",border:"none",cursor:"pointer",padding:5,borderRadius:7,display:"flex",color:"rgba(255,255,255,0.8)" }}>{uploadingCert===cert.id?<Loader2 size={11} style={{ animation:"spin 1s linear infinite" }}/>:<Upload size={11}/>}</button>
+                                <button onClick={()=>{setEditCertTarget({catId:cat.id,certId:cert.id});setCertForm({name:cert.name,issuer:cert.issuer||"",date:cert.date||"",expiry:cert.expiry||"",score:cert.score||"",note:cert.note||"",color:cert.color});}} title="수정" style={{ background:"rgba(255,255,255,0.15)",border:"none",cursor:"pointer",padding:5,borderRadius:7,display:"flex",color:"rgba(255,255,255,0.8)" }}><Edit2 size={11}/></button>
+                                <button onClick={()=>setConfirmDelete({type:"cert",catId:cat.id,certId:cert.id})} title="삭제" style={{ background:"rgba(255,255,255,0.15)",border:"none",cursor:"pointer",padding:5,borderRadius:7,display:"flex",color:"rgba(255,255,255,0.8)" }}><Trash2 size={11}/></button>
                               </div>
                             </div>
                             <h3 style={{ fontSize:14,fontWeight:700,color:"rgba(255,255,255,0.95)",marginBottom:2 }}>{cert.name}</h3>
@@ -853,6 +919,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
       {showAddCat&&(<Modal title="카테고리 추가" onClose={()=>setShowAddCat(false)}><div style={{ ...S.col,gap:16 }}><Input label="카테고리 이름" value={newCat.name} onChange={e=>setNewCat(p=>({...p,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addCategory()} placeholder="어학, IT, 국가자격증 ..."/><Field label="색상"><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{SEC_COLORS.map(c=>(<button key={c} onClick={()=>setNewCat(p=>({...p,color:c}))} style={{ width:28,height:28,borderRadius:"50%",background:c,border:newCat.color===c?"3px solid white":"3px solid transparent",cursor:"pointer",outline:"none",opacity:newCat.color===c?1:0.5 }}/>))}</div></Field><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setShowAddCat(false)}>취소</Btn><Btn onClick={addCategory}>추가</Btn></div></div></Modal>)}
       {showAddCert&&(<Modal title="자격증 추가" onClose={()=>setShowAddCert(null)}><div style={{ ...S.col,gap:12 }}><Input label="자격증명 *" value={certForm.name} onChange={cf("name")} placeholder="TOEIC, OPIc ..."/><div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}><Input label="발급 기관" value={certForm.issuer} onChange={cf("issuer")} placeholder="ETS ..."/><Input label="점수/등급" value={certForm.score} onChange={cf("score")} placeholder="900, IM2 ..."/></div><div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}><Input label="취득일" type="date" value={certForm.date} onChange={cf("date")}/><Input label="만료일" type="date" value={certForm.expiry} onChange={cf("expiry")}/></div><Textarea label="메모" value={certForm.note} onChange={cf("note")} placeholder="갱신 요건 ..."/><Field label="카드 색상"><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{CERT_COLORS.map(c=>(<button key={c} onClick={()=>setCertForm(p=>({...p,color:c}))} style={{ width:28,height:28,borderRadius:"50%",background:c,border:certForm.color===c?"3px solid white":"3px solid transparent",cursor:"pointer",outline:"none" }}/>))}</div></Field><div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:4 }}><Btn variant="ghost" onClick={()=>setShowAddCert(null)}>취소</Btn><Btn onClick={()=>addCert(showAddCert)}>추가</Btn></div></div></Modal>)}
       {confirmDelete&&(<Modal title="삭제 확인" onClose={()=>setConfirmDelete(null)}><p style={{ fontSize:13,color:C.text2,marginBottom:20 }}>{confirmDelete.type==="cat"?"이 카테고리와 포함된 모든 자격증을 삭제하시겠습니까?":confirmDelete.type==="cert"?"이 자격증을 삭제하시겠습니까?":`"${confirmDelete.file?.name}" 파일을 삭제하시겠습니까?`}</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setConfirmDelete(null)}>취소</Btn><Btn variant="danger" onClick={()=>{if(confirmDelete.type==="cat")deleteCategory(confirmDelete.catId);else if(confirmDelete.type==="cert")deleteCert(confirmDelete.catId,confirmDelete.certId);else handleDeleteFile(confirmDelete.catId,confirmDelete.certId,confirmDelete.file);}}>삭제</Btn></div></Modal>)}
+      {editCertTarget&&(<Modal title="자격증 수정" onClose={()=>setEditCertTarget(null)}><div style={{ ...S.col,gap:12 }}><Input label="자격증명 *" value={certForm.name} onChange={cf("name")} placeholder="TOEIC, OPIc ..."/><div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}><Input label="발급 기관" value={certForm.issuer} onChange={cf("issuer")} placeholder="ETS ..."/><Input label="점수/등급" value={certForm.score} onChange={cf("score")} placeholder="900, IM2 ..."/></div><div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}><Input label="취득일" type="date" value={certForm.date} onChange={cf("date")}/><Input label="만료일" type="date" value={certForm.expiry} onChange={cf("expiry")}/></div><Textarea label="메모" value={certForm.note} onChange={cf("note")} placeholder="갱신 요건 ..."/><Field label="카드 색상"><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{CERT_COLORS.map(c=>(<button key={c} onClick={()=>setCertForm(p=>({...p,color:c}))} style={{ width:28,height:28,borderRadius:"50%",background:c,border:certForm.color===c?"3px solid white":"3px solid transparent",cursor:"pointer",outline:"none" }}/>))}</div></Field><div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:4 }}><Btn variant="ghost" onClick={()=>setEditCertTarget(null)}>취소</Btn><Btn icon={Check} onClick={()=>updateCert(editCertTarget.catId,editCertTarget.certId)}>저장</Btn></div></div></Modal>)}
     </div>
   );
 }
@@ -869,6 +936,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [confirmEvent, setConfirmEvent] = useState(null);
+  const [editingEventId, setEditingEventId] = useState(null);
   const fld = k=>e=>setForm(p=>({...p,[k]:e.target.value}));
 
   useEffect(() => { handleImportFromGoogle({ silent: true }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -881,14 +949,21 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
       const newEvs = await fetchGoogleCalendarEvents(calId, events);
       if (newEvs.length > 0) { onChange([...events, ...newEvs]); setImportResult({ count: newEvs.length }); setTimeout(()=>setImportResult(null), 4000); }
       else if (!silent) { setImportResult({ count: 0 }); setTimeout(()=>setImportResult(null), 3000); }
-    } catch(e) { console.error(e); if (!silent) alert("Google 캘린더 가져오기에 실패했습니다."); }
+    } catch(e) { console.error(e); if (!silent) addToast("error","Google 캘린더 가져오기에 실패했습니다."); }
     finally { setImporting(false); }
   }
 
-  function openAdd(date=today()){ setForm(p=>({...p,date})); setShowAdd(true); }
+  function openAdd(date=today()){ setEditingEventId(null); setForm({ title:"",date,type:"exam",note:"",isDday:true,syncCal:true }); setShowAdd(true); }
+  function openEdit(ev){ setEditingEventId(ev.id); setForm({ title:ev.title,date:ev.date,type:ev.type,note:ev.note||"",isDday:ev.isDday,syncCal:false }); setShowAdd(true); }
 
   async function addEvent() {
     if (!form.title.trim()||!form.date) return;
+    if (editingEventId) {
+      onChange(events.map(e=>e.id!==editingEventId?e:{...e,title:form.title,date:form.date,type:form.type,note:form.note,isDday:form.isDday}));
+      setEditingEventId(null); setShowAdd(false); setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true });
+      addToast("success","일정이 수정되었습니다.");
+      return;
+    }
     setAddingCal(true);
     let googleEventId = null, calId = calendarId;
     try {
@@ -921,7 +996,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
       if (!calId) { calId = await getOrCreateCareerCalendar(); setCalendarId(calId); }
       const googleEventId = await addToGoogleCalendar(ev, calId);
       onChange(events.map(e=>e.id!==ev.id?e:{...e,googleEventId,syncedToCalendar:true}));
-    } catch(e) { console.error(e); alert("Google 캘린더 동기화 실패"); }
+    } catch(e) { console.error(e); addToast("error","Google 캘린더 동기화 실패"); }
     finally { setRemovingCal(null); }
   }
 
@@ -1047,6 +1122,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
               {!selectedEvent.syncedToCalendar&&(
                 <Btn variant="success" icon={CalendarPlus} loading={removingCal===selectedEvent.id} onClick={async()=>{ await syncEventToCalendar(selectedEvent); setSelectedEvent(null); }}>Google 캘린더에 추가</Btn>
               )}
+              <Btn variant="ghost" icon={Edit2} onClick={()=>{const ev=selectedEvent;setSelectedEvent(null);openEdit(ev);}}>수정</Btn>
               <Btn variant="danger" icon={Trash2} onClick={()=>{setSelectedEvent(null);setConfirmEvent(selectedEvent);}}>삭제</Btn>
             </div>
           </div>
@@ -1054,7 +1130,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
       )}
 
       {showAdd&&(
-        <Modal title="일정 추가" onClose={()=>setShowAdd(false)}>
+        <Modal title={editingEventId?"일정 수정":"일정 추가"} onClose={()=>{setShowAdd(false);setEditingEventId(null);}}>
           <div style={{ ...S.col,gap:12 }}>
             <Input label="제목 *" value={form.title} onChange={fld("title")} onKeyDown={e=>e.key==="Enter"&&addEvent()} placeholder="TOEIC 시험 ..."/>
             <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
@@ -1080,8 +1156,8 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
               </div>
             </label>
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:4 }}>
-              <Btn variant="ghost" onClick={()=>setShowAdd(false)}>취소</Btn>
-              <Btn onClick={addEvent} loading={addingCal}>{addingCal?"Google 캘린더 동기화 중...":"추가"}</Btn>
+              <Btn variant="ghost" onClick={()=>{setShowAdd(false);setEditingEventId(null);}}>취소</Btn>
+              <Btn onClick={addEvent} loading={addingCal}>{editingEventId?"저장":addingCal?"Google 캘린더 동기화 중...":"추가"}</Btn>
             </div>
           </div>
         </Modal>
@@ -1091,8 +1167,103 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   );
 }
 
+// ─── SEARCH RESULTS ────────────────────────────────────────
+function SearchResults({ query, library, certCategories, events, setPage, clearSearch }) {
+  const q = query.toLowerCase();
+
+  const fileResults = useMemo(() => {
+    const res = [];
+    function searchNode(files, folders, section, path) {
+      (files||[]).forEach(f => { if (f.name.toLowerCase().includes(q)) res.push({ ...f, _section:section.subject, _color:section.color, _path:path }); });
+      (folders||[]).forEach(folder => searchNode(folder.files, folder.folders, section, path + " › " + folder.name));
+    }
+    library.forEach(s => searchNode(s.files, s.folders, s, s.subject));
+    return res;
+  }, [query, library]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const certResults = useMemo(() => {
+    const res = [];
+    certCategories.forEach(cat => (cat.certs||[]).forEach(cert => {
+      if ([cert.name, cert.issuer, cert.score, cert.note].some(v => v?.toLowerCase().includes(q)))
+        res.push({ ...cert, _catName:cat.name, _catColor:cat.color });
+    }));
+    return res;
+  }, [query, certCategories]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const eventResults = useMemo(() =>
+    events.filter(e => [e.title, e.note].some(v => v?.toLowerCase().includes(q))),
+    [query, events] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const total = fileResults.length + certResults.length + eventResults.length;
+
+  function highlight(text) {
+    if (!text) return text;
+    const idx = text.toLowerCase().indexOf(q);
+    if (idx < 0) return text;
+    return <>{text.slice(0, idx)}<mark style={{ background:C.accent+"40", color:C.text1, borderRadius:2, padding:"0 2px" }}>{text.slice(idx, idx+q.length)}</mark>{text.slice(idx+q.length)}</>;
+  }
+
+  const Row = ({ icon:Icon, color, primary, secondary, badge, onGo }) => (
+    <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderBottom:`1px solid ${C.border}` }}>
+      <div style={{ borderRadius:7,padding:5,background:color+"22",flexShrink:0 }}><Icon size={11} color={color}/></div>
+      <div style={{ flex:1,minWidth:0 }}>
+        <div style={{ fontSize:12,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{primary}</div>
+        {secondary&&<div style={{ fontSize:10,color:C.text3,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{secondary}</div>}
+      </div>
+      {badge&&<span style={{ fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:99,background:badge.bg,color:badge.color,flexShrink:0 }}>{badge.text}</span>}
+      <button onClick={onGo} style={{ fontSize:11,color:C.accent,background:"transparent",border:`1px solid ${C.accent}30`,cursor:"pointer",padding:"3px 10px",borderRadius:8,flexShrink:0 }}>이동</button>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24 }}>
+        <div>
+          <h2 style={{ fontSize:20,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>검색 결과</h2>
+          <p style={{ fontSize:13,color:C.text2,marginTop:4 }}>"{query}" — {total}건</p>
+        </div>
+        <button onClick={clearSearch} style={{ display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:10,background:"transparent",border:`1px solid ${C.border2}`,color:C.text2,fontSize:12,cursor:"pointer",fontFamily:"inherit" }}><X size={12}/>검색 닫기</button>
+      </div>
+      {total === 0 && <EmptyState icon={Search} title="검색 결과가 없습니다" sub={`"${query}"에 해당하는 항목이 없습니다`}/>}
+      {fileResults.length > 0 && (
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontSize:11,fontWeight:600,color:C.text3,marginBottom:8,display:"flex",alignItems:"center",gap:5,letterSpacing:"0.05em" }}><FileText size={11}/>학습 자료 {fileResults.length}건</div>
+          <div style={{ ...S.card,overflow:"hidden" }}>
+            {fileResults.map(f => <Row key={f.id} icon={FileText} color={f._color} primary={highlight(f.name)} secondary={f._path} onGo={()=>{setPage("library");clearSearch();}}/>)}
+          </div>
+        </div>
+      )}
+      {certResults.length > 0 && (
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontSize:11,fontWeight:600,color:C.text3,marginBottom:8,display:"flex",alignItems:"center",gap:5,letterSpacing:"0.05em" }}><Award size={11}/>자격증 {certResults.length}건</div>
+          <div style={{ ...S.card,overflow:"hidden" }}>
+            {certResults.map(c => {
+              const d = c.expiry ? diffDays(c.expiry) : null;
+              const badge = d !== null ? (d < 0 ? {text:"만료됨",bg:C.danger+"22",color:C.danger} : d < 90 ? {text:`D-${d}`,bg:C.warning+"22",color:C.warning} : {text:"유효",bg:C.success+"22",color:C.success}) : null;
+              return <Row key={c.id} icon={Award} color={c._catColor} primary={highlight(c.name)} secondary={[c._catName, c.issuer].filter(Boolean).join(" · ")} badge={badge} onGo={()=>{setPage("certs");clearSearch();}}/>;
+            })}
+          </div>
+        </div>
+      )}
+      {eventResults.length > 0 && (
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontSize:11,fontWeight:600,color:C.text3,marginBottom:8,display:"flex",alignItems:"center",gap:5,letterSpacing:"0.05em" }}><Calendar size={11}/>일정 {eventResults.length}건</div>
+          <div style={{ ...S.card,overflow:"hidden" }}>
+            {eventResults.map(e => {
+              const diff = diffDays(e.date);
+              const badge = e.isDday ? {text:dDayLabel(diff),bg:(diff===0?C.danger:diff<0?C.text3:C.accent)+"22",color:diff===0?C.danger:diff<0?C.text3:C.accent} : null;
+              return <Row key={e.id} icon={Calendar} color={EVENT_TYPES[e.type]?.color||C.accent} primary={highlight(e.title)} secondary={`${formatDate(e.date)} · ${EVENT_TYPES[e.type]?.label}`} badge={badge} onGo={()=>{setPage("scheduler");clearSearch();}}/>;
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── SIDEBAR ───────────────────────────────────────────────
-function Sidebar({ page, setPage, certCategories, events, syncStatus, onSignOut, userInfo }) {
+function Sidebar({ page, setPage, certCategories, events, syncStatus, onSignOut, userInfo, searchQuery, setSearchQuery }) {
   const totalCerts=certCategories.reduce((a,c)=>a+(c.certs||[]).length,0);
   const upcoming=events.filter(e=>e.isDday&&diffDays(e.date)>=0).length;
   const navItems=[
@@ -1109,8 +1280,20 @@ function Sidebar({ page, setPage, certCategories, events, syncStatus, onSignOut,
           <div><div style={{ fontSize:14,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>CareerKit</div><div style={{ display:"flex",alignItems:"center",gap:5,marginTop:2 }}><SyncDot status={syncStatus}/><span style={{ fontSize:10,color:C.text3 }}>{syncStatus==="synced"?"Drive 동기화됨":syncStatus==="syncing"?"저장 중...":"오류"}</span></div></div>
         </div>
       </div>
+      <div style={{ padding:"0 12px 8px" }}>
+        <div style={{ position:"relative" }}>
+          <Search size={12} style={{ position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.text3,pointerEvents:"none" }}/>
+          <input
+            value={searchQuery}
+            onChange={e=>setSearchQuery(e.target.value)}
+            placeholder="검색..."
+            style={{ ...S.input,paddingLeft:30,paddingRight:searchQuery?28:12,fontSize:12,height:34 }}
+          />
+          {searchQuery&&<button onClick={()=>setSearchQuery("")} style={{ position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",cursor:"pointer",padding:2,color:C.text3,display:"flex" }}><X size={11}/></button>}
+        </div>
+      </div>
       <div style={{ flex:1,padding:"4px 12px",overflowY:"auto" }}>
-        {navItems.map(item=>{const active=page===item.id;return(<button key={item.id} onClick={()=>setPage(item.id)} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:12,width:"100%",textAlign:"left",cursor:"pointer",fontFamily:"inherit",marginBottom:2,background:active?`${C.accent}18`:"transparent",color:active?C.accent:C.text2,border:active?`1px solid ${C.accent}30`:"1px solid transparent",transition:"all 0.15s" }}><item.icon size={15} style={{ flexShrink:0 }}/><span style={{ flex:1,fontSize:13,fontWeight:500 }}>{item.label}</span>{item.badge>0&&<span style={{ fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:99,background:active?C.accent:C.surface3,color:active?"white":C.text2 }}>{item.badge}</span>}</button>);})}
+        {navItems.map(item=>{const active=page===item.id&&!searchQuery;return(<button key={item.id} onClick={()=>{setPage(item.id);setSearchQuery("");}} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:12,width:"100%",textAlign:"left",cursor:"pointer",fontFamily:"inherit",marginBottom:2,background:active?`${C.accent}18`:"transparent",color:active?C.accent:C.text2,border:active?`1px solid ${C.accent}30`:"1px solid transparent",transition:"all 0.15s" }}><item.icon size={15} style={{ flexShrink:0 }}/><span style={{ flex:1,fontSize:13,fontWeight:500 }}>{item.label}</span>{item.badge>0&&<span style={{ fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:99,background:active?C.accent:C.surface3,color:active?"white":C.text2 }}>{item.badge}</span>}</button>);})}
       </div>
       <div style={{ padding:"12px 16px",borderTop:`1px solid ${C.border}` }}>
         <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:10 }}>
@@ -1131,6 +1314,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState("synced");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userInfo, setUserInfo] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
   const [calendarId, setCalendarId] = useState(()=>localStorage.getItem("career_cal_id")||null);
 
@@ -1166,27 +1350,33 @@ export default function App() {
   const updateEvents=useCallback(events=>{const d={...data,events};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
   const handleSetCalendarId=useCallback(id=>{setCalendarId(id);localStorage.setItem("career_cal_id",id);},[]);
 
-  const globalStyle=`* { box-sizing: border-box; margin: 0; padding: 0; } html, body, #root { height: 100%; } body { background: ${C.bg}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; } ::-webkit-scrollbar { width: 4px; height: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 99px; } input, select, textarea, button { font-family: inherit; } input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.4); } select option { background: ${C.surface2}; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%,100%{opacity:1;}50%{opacity:0.4;} } a { text-decoration: none; }`;
+  const globalStyle=`* { box-sizing: border-box; margin: 0; padding: 0; } html, body, #root { height: 100%; } body { background: ${C.bg}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; } ::-webkit-scrollbar { width: 4px; height: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 99px; } input, select, textarea, button { font-family: inherit; } input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.4); } select option { background: ${C.surface2}; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%,100%{opacity:1;}50%{opacity:0.4;} } @keyframes toastIn { from { opacity:0; transform:translateX(12px) scale(0.96); } to { opacity:1; transform:translateX(0) scale(1); } } a { text-decoration: none; }`;
 
   if(authState==="loading") return(<><style>{globalStyle}</style><div style={{ height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg }}><Loader2 size={32} color={C.accent} style={{ animation:"spin 1s linear infinite" }}/></div></>);
   if(authState==="login") return(<><style>{globalStyle}</style><LoginScreen onSignIn={handleSignIn} loading={loginLoading}/></>);
 
-  const pages={
-    dashboard:<Dashboard library={data.library} certCategories={data.certCategories} events={data.events} setPage={setPage} userInfo={userInfo}/>,
-    library:  <Library library={data.library} onChange={updateLibrary} driveFolderId={driveFolderIdRef.current}/>,
-    certs:    <Certificates certCategories={data.certCategories} onChange={updateCerts} driveFolderId={driveFolderIdRef.current}/>,
-    scheduler:<Scheduler events={data.events} onChange={updateEvents} calendarId={calendarId} setCalendarId={handleSetCalendarId}/>,
-  };
+  const clearSearch = () => setSearchQuery("");
+  const mainContent = searchQuery.trim()
+    ? <SearchResults query={searchQuery.trim()} library={data.library} certCategories={data.certCategories} events={data.events} setPage={setPage} clearSearch={clearSearch}/>
+    : {
+        dashboard:<Dashboard library={data.library} certCategories={data.certCategories} events={data.events} setPage={setPage} userInfo={userInfo}/>,
+        library:  <Library library={data.library} onChange={updateLibrary} driveFolderId={driveFolderIdRef.current}/>,
+        certs:    <Certificates certCategories={data.certCategories} onChange={updateCerts} driveFolderId={driveFolderIdRef.current}/>,
+        scheduler:<Scheduler events={data.events} onChange={updateEvents} calendarId={calendarId} setCalendarId={handleSetCalendarId}/>,
+      }[page];
+
+  const sidebarProps = { page, setPage, certCategories:data.certCategories, events:data.events, syncStatus, onSignOut:handleSignOut, userInfo, searchQuery, setSearchQuery };
 
   return (
     <>
       <style>{globalStyle}</style>
       <style>{`@media(min-width:768px){.sidebar-desktop{display:flex!important;flex-direction:column;}.mobile-topbar{display:none!important;}}`}</style>
+      <ToastContainer/>
       <div style={{ display:"flex",height:"100vh",overflow:"hidden",background:C.bg }}>
         <div className="sidebar-desktop" style={{ display:"none",flexShrink:0,background:C.surface,borderRight:`1px solid ${C.border}` }}>
-          <Sidebar page={page} setPage={setPage} certCategories={data.certCategories} events={data.events} syncStatus={syncStatus} onSignOut={handleSignOut} userInfo={userInfo}/>
+          <Sidebar {...sidebarProps}/>
         </div>
-        {sidebarOpen&&(<div onClick={()=>setSidebarOpen(false)} style={{ position:"fixed",inset:0,zIndex:40,background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)" }}><div onClick={e=>e.stopPropagation()} style={{ position:"absolute",left:0,top:0,bottom:0,width:240,background:C.surface,borderRight:`1px solid ${C.border2}`,display:"flex",flexDirection:"column" }}><Sidebar page={page} setPage={p=>{setPage(p);setSidebarOpen(false);}} certCategories={data.certCategories} events={data.events} syncStatus={syncStatus} onSignOut={handleSignOut} userInfo={userInfo}/></div></div>)}
+        {sidebarOpen&&(<div onClick={()=>setSidebarOpen(false)} style={{ position:"fixed",inset:0,zIndex:40,background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)" }}><div onClick={e=>e.stopPropagation()} style={{ position:"absolute",left:0,top:0,bottom:0,width:240,background:C.surface,borderRight:`1px solid ${C.border2}`,display:"flex",flexDirection:"column" }}><Sidebar {...sidebarProps} setPage={p=>{setPage(p);setSidebarOpen(false);setSearchQuery("");}} /></div></div>)}
         <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden" }}>
           <div className="mobile-topbar" style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:C.surface,borderBottom:`1px solid ${C.border}` }}>
             <button onClick={()=>setSidebarOpen(true)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:6,color:C.text2,display:"flex",borderRadius:8 }}><Menu size={16}/></button>
@@ -1195,8 +1385,8 @@ export default function App() {
           </div>
           <div style={{ flex:1,overflowY:"auto" }}>
             <div style={{ maxWidth:900,margin:"0 auto",padding:"32px 24px" }}>
-              <CountdownBanner events={data.events}/>
-              {pages[page]}
+              {!searchQuery && <CountdownBanner events={data.events}/>}
+              {mainContent}
             </div>
           </div>
         </div>
