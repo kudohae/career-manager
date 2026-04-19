@@ -219,23 +219,20 @@ function useDragList(items, onReorder) {
 }
 
 // ─── ANNOTATION CANVAS ─────────────────────────────────────
-// Samsung Notes 방식:
-//  - native addEventListener + { passive: false } → preventDefault 동작 보장
-//  - pointerType === "touch" → 즉시 return (손가락 스크롤 통과)
-//  - pointerType === "pen" + drawMode ON → 그리기
-//  - pointerType === "pen" + 배럴 버튼 (buttons & 2) → drawMode 무관, 지우개
-//  - drawMode OFF → canvas pointerEvents:none → iframe/페이지가 입력 받음
+// 입력 타입으로 동작을 고정:
+//  - pointerType === "touch" → 즉시 return, touchAction으로 스크롤/핀치줌 통과
+//  - pointerType === "pen" → 항상 그리기 (drawMode 개념 없음)
+//  - pen + 배럴 버튼 (buttons & 2) → 지우개
 function AnnotationCanvas({ driveFileId }) {
-  const canvasRef   = useRef(null);
-  const isDrawing   = useRef(false);
-  const toolRef     = useRef("pen");
-  const colorRef    = useRef("#e74c3c");
-  const sizeRef     = useRef(3);
-  const undoStack   = useRef([]);
-  const saveTimer   = useRef(null);
-  const barrelActive = useRef(false); // 배럴 버튼 누른 동안
+  const canvasRef    = useRef(null);
+  const isDrawing    = useRef(false);
+  const toolRef      = useRef("pen");
+  const colorRef     = useRef("#e74c3c");
+  const sizeRef      = useRef(3);
+  const undoStack    = useRef([]);
+  const saveTimer    = useRef(null);
+  const barrelActive = useRef(false);
 
-  const [drawMode, setDrawMode] = useState(false);
   const [tool,  setTool_]  = useState("pen");
   const [color, setColor_] = useState("#e74c3c");
   const [size,  setSize_]  = useState(3);
@@ -247,7 +244,6 @@ function AnnotationCanvas({ driveFileId }) {
   function setColor(c) { colorRef.current = c; setColor_(c); }
   function setSize(s)  { sizeRef.current  = s; setSize_(s); }
 
-  // 저장된 어노테이션 불러오기
   useEffect(() => {
     if (!driveFileId) return;
     (async () => {
@@ -310,22 +306,18 @@ function AnnotationCanvas({ driveFileId }) {
     }
 
     function onDown(e) {
-      // 손가락은 완전히 무시 → 스크롤 통과
+      // 손가락: touchAction이 스크롤/핀치줌 처리, JS는 개입하지 않음
       if (e.pointerType === "touch") return;
-      // pen일 때만 처리
+      // 펜만 그리기
       if (e.pointerType !== "pen") return;
-
-      const isBarrel = (e.buttons & 2) !== 0;
-
-      // drawMode도 꺼져 있고 배럴도 아니면 무시 (페이지 제스처 통과)
-      if (!drawMode && !isBarrel) return;
 
       e.preventDefault();
       e.stopPropagation();
 
+      const isBarrel = (e.buttons & 2) !== 0;
       if (isBarrel) {
         barrelActive.current = true;
-        toolRef.current = "eraser"; // 배럴 → 임시 지우개
+        toolRef.current = "eraser";
       }
 
       pushUndo();
@@ -360,10 +352,9 @@ function AnnotationCanvas({ driveFileId }) {
       const ctx = canvas.getContext("2d");
       ctx.beginPath();
 
-      // 배럴 버튼이 완전히 해제됐으면 원래 도구 복원
       if (barrelActive.current && (e.buttons & 2) === 0) {
         barrelActive.current = false;
-        toolRef.current = tool; // tool state에서 복원
+        toolRef.current = tool;
         setTool_(tool);
       }
 
@@ -381,25 +372,22 @@ function AnnotationCanvas({ driveFileId }) {
       canvas.removeEventListener("pointerup",     onUp);
       canvas.removeEventListener("pointercancel", onUp);
     };
-    // tool을 deps에 포함: barrelActive 복원 시 최신 tool 값 필요
-  }, [drawMode, tool, driveFileId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tool, driveFileId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ctrl+Z 단축키
   useEffect(() => {
-    if (!drawMode) return;
     function onKey(e) {
       if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drawMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function undo() {
     if (!undoStack.current.length) return;
     const snap = undoStack.current.pop();
     canvasRef.current.getContext("2d").putImageData(snap, 0, 0);
     setUndoLen(undoStack.current.length);
-    // 저장 예약
     setDirty(true);
     if (driveFileId) {
       clearTimeout(saveTimer.current);
@@ -414,7 +402,6 @@ function AnnotationCanvas({ driveFileId }) {
   function clearCanvas() {
     const c = canvasRef.current;
     const ctx = c.getContext("2d");
-    // undo 스냅샷 저장
     undoStack.current.push(ctx.getImageData(0, 0, c.width, c.height));
     if (undoStack.current.length > 30) undoStack.current.shift();
     setUndoLen(undoStack.current.length);
@@ -434,70 +421,50 @@ function AnnotationCanvas({ driveFileId }) {
 
   return (
     <div style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-      {/* 그리기 모드 토글 — 항상 표시 */}
-      <div style={{ position:"absolute", top:8, left:8, zIndex:11, pointerEvents:"all" }}>
-        <button
-          onClick={() => setDrawMode(p => !p)}
-          title={drawMode ? "그리기 모드 끄기 (스크롤 가능)" : "그리기 모드 켜기 (S펜 입력)"}
-          style={{
-            background: drawMode ? C.accent : "rgba(15,21,33,0.85)",
-            border: `1px solid ${drawMode ? C.accent : "rgba(255,255,255,0.15)"}`,
-            borderRadius: 10, padding:"6px 10px", cursor:"pointer",
-            display:"flex", alignItems:"center", gap:6,
-            color:"white", fontSize:11, fontWeight:600, fontFamily:"inherit",
-            boxShadow:"0 2px 12px rgba(0,0,0,0.4)",
-          }}>
-          <Pencil size={13}/>
-          {drawMode ? "그리기 ON" : "그리기"}
-        </button>
+      {/* 도구 패널 — 항상 표시 */}
+      <div style={{ position:"absolute", top:8, right:8, zIndex:10, pointerEvents:"all" }}>
+        <div style={{
+          background:"rgba(15,21,33,0.92)", borderRadius:12, padding:"8px 6px",
+          display:"flex", flexDirection:"column", gap:5,
+          border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 4px 20px rgba(0,0,0,0.4)"
+        }}>
+          <button onClick={() => setTool("pen")} title="펜"
+            style={{ background:tool==="pen"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
+            <Pencil size={14}/>
+          </button>
+          <button onClick={() => setTool("eraser")} title="지우개 (S펜 배럴 버튼도 가능)"
+            style={{ background:tool==="eraser"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
+            <Eraser size={14}/>
+          </button>
+          <button onClick={undo} disabled={undoLen===0} title="되돌리기 (Ctrl+Z)"
+            style={{ background:"transparent", border:"none", cursor:undoLen?"pointer":"default", padding:6, borderRadius:8, display:"flex", color:undoLen?C.text2:C.text3, opacity:undoLen?1:0.4 }}>
+            <Undo2 size={14}/>
+          </button>
+          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+          <input type="range" min={1} max={20} value={size} onChange={e => setSize(Number(e.target.value))}
+            title={`굵기: ${size}`}
+            style={{ width:14, height:70, writingMode:"vertical-lr", direction:"rtl", cursor:"pointer", accentColor:C.accent }}/>
+          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+          {COLORS.map(col => (
+            <button key={col} onClick={() => { setTool("pen"); setColor(col); }}
+              style={{ width:20, height:20, borderRadius:"50%", background:col,
+                border: color===col&&tool==="pen" ? "2px solid white" : "2px solid rgba(255,255,255,0.2)",
+                cursor:"pointer", flexShrink:0 }}/>
+          ))}
+          <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
+          <button onClick={clearCanvas} title="전체 지우기"
+            style={{ background:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:C.danger }}>
+            <Trash2 size={14}/>
+          </button>
+          {saving && <Loader2 size={14} color={C.accent} style={{ animation:"spin 1s linear infinite", margin:"0 auto" }}/>}
+          {dirty && !saving && <div style={{ width:6, height:6, borderRadius:"50%", background:C.warning, margin:"0 auto" }}/>}
+        </div>
       </div>
 
-      {/* 도구 패널 — drawMode ON일 때만 */}
-      {drawMode && (
-        <div style={{ position:"absolute", top:8, right:8, zIndex:10, pointerEvents:"all" }}>
-          <div style={{
-            background:"rgba(15,21,33,0.92)", borderRadius:12, padding:"8px 6px",
-            display:"flex", flexDirection:"column", gap:5,
-            border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 4px 20px rgba(0,0,0,0.4)"
-          }}>
-            <button onClick={() => setTool("pen")} title="펜"
-              style={{ background:tool==="pen"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
-              <Pencil size={14}/>
-            </button>
-            <button onClick={() => setTool("eraser")} title="지우개 (S펜 배럴 버튼도 가능)"
-              style={{ background:tool==="eraser"?C.accent:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:"white" }}>
-              <Eraser size={14}/>
-            </button>
-            <button onClick={undo} disabled={undoLen===0} title="되돌리기 (Ctrl+Z)"
-              style={{ background:"transparent", border:"none", cursor:undoLen?"pointer":"default", padding:6, borderRadius:8, display:"flex", color:undoLen?C.text2:C.text3, opacity:undoLen?1:0.4 }}>
-              <Undo2 size={14}/>
-            </button>
-            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-            <input type="range" min={1} max={20} value={size} onChange={e => setSize(Number(e.target.value))}
-              title={`굵기: ${size}`}
-              style={{ width:14, height:70, writingMode:"vertical-lr", direction:"rtl", cursor:"pointer", accentColor:C.accent }}/>
-            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-            {COLORS.map(col => (
-              <button key={col} onClick={() => { setTool("pen"); setColor(col); }}
-                style={{ width:20, height:20, borderRadius:"50%", background:col,
-                  border: color===col&&tool==="pen" ? "2px solid white" : "2px solid rgba(255,255,255,0.2)",
-                  cursor:"pointer", flexShrink:0 }}/>
-            ))}
-            <div style={{ height:1, background:"rgba(255,255,255,0.1)", margin:"2px 0" }}/>
-            <button onClick={clearCanvas} title="전체 지우기"
-              style={{ background:"transparent", border:"none", cursor:"pointer", padding:6, borderRadius:8, display:"flex", color:C.danger }}>
-              <Trash2 size={14}/>
-            </button>
-            {saving && <Loader2 size={14} color={C.accent} style={{ animation:"spin 1s linear infinite", margin:"0 auto" }}/>}
-            {dirty && !saving && <div style={{ width:6, height:6, borderRadius:"50%", background:C.warning, margin:"0 auto" }}/>}
-          </div>
-        </div>
-      )}
-
       {/* 캔버스
-          - drawMode ON  → pointerEvents:all (핸들러에서 pen만 처리, touch는 즉시 return)
-          - drawMode OFF → pointerEvents:none → iframe/페이지가 직접 받음
-          touchAction:pan-x pan-y → 브라우저가 손가락 스크롤 기본 처리 허용
+          - pointerEvents:all 고정 (항상 이벤트 수신)
+          - touch → 핸들러에서 즉시 return, touchAction으로 스크롤/핀치줌 브라우저 처리
+          - pen → 항상 preventDefault 후 그리기
       */}
       <canvas
         ref={canvasRef}
@@ -505,9 +472,9 @@ function AnnotationCanvas({ driveFileId }) {
         height={1600}
         style={{
           position:"absolute", inset:0, width:"100%", height:"100%",
-          cursor: drawMode ? (tool==="eraser" ? "cell" : "crosshair") : "default",
-          pointerEvents: drawMode ? "all" : "none",
-          touchAction: "pan-x pan-y",
+          cursor: tool==="eraser" ? "cell" : "crosshair",
+          pointerEvents: "all",
+          touchAction: "pan-x pan-y pinch-zoom",
         }}
       />
     </div>
