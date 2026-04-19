@@ -737,8 +737,20 @@ function FileRow({ file, color, onDelete, onRename, onView, onMove, deleting, de
   const [editing, setEditing] = useState(false);
   const [newName, setNewName] = useState(file.name);
   const [renaming, setRenaming] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const FIcon = isImage(file.name)?Image:isPdf(file.name)?FileText:File;
   async function saveRename() { if(!newName.trim()||newName===file.name){setEditing(false);return;} setRenaming(true); await onRename(file,newName.trim()); setRenaming(false); setEditing(false); }
+  async function handleDownload() {
+    if (!file.driveId) return;
+    setDownloading(true);
+    try {
+      const blob = await fetchFileBlob(file.driveId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href=url; a.download=file.name; a.click();
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    } catch(e) { console.error(e); } finally { setDownloading(false); }
+  }
   return (
     <div style={{ display:"flex",alignItems:"center",gap:10,padding:"8px 16px",paddingLeft:16+depth*20,borderBottom:`1px solid ${C.border}` }}>
       <div style={{ borderRadius:7,padding:5,background:(color||C.accent)+"18",flexShrink:0 }}><FIcon size={11} color={color||C.accent}/></div>
@@ -747,12 +759,19 @@ function FileRow({ file, color, onDelete, onRename, onView, onMove, deleting, de
       <span style={{ fontSize:10,color:C.text3,flexShrink:0 }}>{formatDate(file.date)}</span>
       {editing?(
         <button onClick={saveRename} disabled={renaming} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.success,display:"flex" }}>{renaming?<Loader2 size={11} style={{ animation:"spin 1s linear infinite" }}/>:<Check size={11}/>}</button>
+      ):confirming?(
+        <>
+          <span style={{ fontSize:10,color:C.danger,flexShrink:0 }}>삭제?</span>
+          <button onClick={()=>{setConfirming(false);onDelete(file);}} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.danger,display:"flex" }}><Check size={11}/></button>
+          <button onClick={()=>setConfirming(false)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.text2,display:"flex" }}><X size={11}/></button>
+        </>
       ):(
         <>
           <button onClick={()=>onView(file)} title="보기" style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.accent,display:"flex" }}><Eye size={11}/></button>
+          {file.driveId&&<button onClick={handleDownload} disabled={downloading} title="다운로드" style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.text2,display:"flex" }}>{downloading?<Loader2 size={11} style={{ animation:"spin 1s linear infinite" }}/>:<Download size={11}/>}</button>}
           <button onClick={()=>{setEditing(true);setNewName(file.name);}} title="이름 변경" style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.text2,display:"flex" }}><Pencil size={11}/></button>
           {onMove && <button onClick={()=>onMove(file)} title="이동" style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.text2,display:"flex" }}><MoveRight size={11}/></button>}
-          <button onClick={()=>onDelete(file)} disabled={deleting===file.id} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.danger,display:"flex" }}>{deleting===file.id?<Loader2 size={11} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={11}/>}</button>
+          <button onClick={()=>setConfirming(true)} disabled={deleting===file.id} title="삭제" style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.danger,display:"flex" }}>{deleting===file.id?<Loader2 size={11} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={11}/>}</button>
         </>
       )}
     </div>
@@ -766,6 +785,7 @@ function FolderTree({ folder, sectionId, sectionColor, depth=0, onDeleteFile, on
   const [editName, setEditName] = useState(folder.name);
   const [showAddSub, setShowAddSub] = useState(false);
   const [subName, setSubName] = useState("");
+  const [confirmFolder, setConfirmFolder] = useState(false);
   const indentPx = 20+depth*16;
   const isUploading = uploading&&uploadTarget?.folderId===folder.id;
   function saveRename() { if(!editName.trim()){setEditing(false);return;} onRenameFolder(sectionId,folder.id,editName.trim()); setEditing(false); }
@@ -780,7 +800,15 @@ function FolderTree({ folder, sectionId, sectionColor, depth=0, onDeleteFile, on
         {editing?(<button onClick={saveRename} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:sectionColor,display:"flex" }}><Check size={11}/></button>):(<button onClick={()=>{setEditing(true);setEditName(folder.name);}} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.text2,display:"flex" }}><Pencil size={11}/></button>)}
         <button onClick={()=>setShowAddSub(true)} title="하위 폴더" style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.text2,display:"flex" }}><FolderOpen size={11}/></button>
         <button onClick={()=>onUpload(sectionId,folder.id)} disabled={isUploading} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:sectionColor,display:"flex" }}>{isUploading?<Loader2 size={11} style={{ animation:"spin 1s linear infinite" }}/>:<Upload size={11}/>}</button>
-        <button onClick={()=>onDeleteFolder(sectionId,folder.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.danger,display:"flex" }}><Trash2 size={11}/></button>
+        {confirmFolder?(
+          <>
+            <span style={{ fontSize:10,color:C.danger,flexShrink:0 }}>삭제?</span>
+            <button onClick={()=>{setConfirmFolder(false);onDeleteFolder(sectionId,folder.id);}} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.danger,display:"flex" }}><Check size={11}/></button>
+            <button onClick={()=>setConfirmFolder(false)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.text2,display:"flex" }}><X size={11}/></button>
+          </>
+        ):(
+          <button onClick={()=>setConfirmFolder(true)} title="폴더 삭제" style={{ background:"transparent",border:"none",cursor:"pointer",padding:3,color:C.danger,display:"flex" }}><Trash2 size={11}/></button>
+        )}
       </div>
       {showAddSub&&(<div style={{ display:"flex",gap:8,padding:"8px 16px",paddingLeft:indentPx+20,background:C.surface2,borderTop:`1px solid ${C.border}` }}><input autoFocus value={subName} onChange={e=>setSubName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addSub();if(e.key==="Escape")setShowAddSub(false);}} placeholder={"하위 폴더 이름 → Enter"} style={{ ...S.input,flex:1,fontSize:11,padding:"5px 8px" }}/><button onClick={addSub} style={{ background:C.accent,border:"none",borderRadius:8,color:"white",fontSize:11,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit" }}>추가</button><button onClick={()=>setShowAddSub(false)} style={{ background:"transparent",border:"none",cursor:"pointer",color:C.text3 }}><X size={12}/></button></div>)}
       {!collapsed&&(<>
@@ -814,6 +842,7 @@ function Library({ library, onChange, driveFolderId }) {
   const [deletingFile, setDeletingFile] = useState(null);
   const [viewingFile, setViewingFile] = useState(null);
   const [movingFile, setMovingFile] = useState(null); // { file, sectionId, folderId }
+  const [confirmSection, setConfirmSection] = useState(null); // { id, name }
   const fileInputRef = useRef(null);
 
   // 폴더 트리 헬퍼
@@ -938,7 +967,7 @@ function Library({ library, onChange, driveFolderId }) {
                 {editSectionId===section.id?(<button onClick={()=>saveSectionEdit(section.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:section.color,display:"flex" }}><Check size={12}/></button>):(<button onClick={()=>{setEditSectionId(section.id);setEditSectionName(section.subject);}} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text2,display:"flex" }}><Pencil size={12}/></button>)}
                 <Btn size="sm" icon={FolderOpen} variant="ghost" style={{ background:section.color+"18",color:section.color,border:"none" }} onClick={()=>setAddFolderTarget(section.id)}>폴더</Btn>
                 <Btn size="sm" icon={Upload} variant="ghost" style={{ background:section.color+"18",color:section.color,border:"none" }} loading={uploading&&uploadTarget?.sectionId===section.id&&!uploadTarget?.folderId} onClick={()=>openUpload(section.id)}>파일</Btn>
-                <button onClick={()=>deleteSection(section.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
+                <button onClick={()=>setConfirmSection({id:section.id,name:section.subject})} title="섹션 삭제" style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
               </div>
               {!collapsed&&(<div>
                 {/* 루트 파일 — 드래그로 순서 변경, 이동 버튼으로 폴더 간 이동 */}
@@ -982,6 +1011,31 @@ function Library({ library, onChange, driveFolderId }) {
       </div>
       {showAddSection&&(<Modal title="새 섹션 추가" onClose={()=>setShowAddSection(false)}><div style={{ ...S.col,gap:16 }}><Input label="과목명" value={newSection.subject} onChange={e=>setNewSection(p=>({...p,subject:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSection()} placeholder="NCS, TOEIC ..."/><Field label="색상"><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{SEC_COLORS.map(c=>(<button key={c} onClick={()=>setNewSection(p=>({...p,color:c}))} style={{ width:28,height:28,borderRadius:"50%",background:c,border:newSection.color===c?"3px solid white":"3px solid transparent",cursor:"pointer",outline:"none",opacity:newSection.color===c?1:0.5 }}/>))}</div></Field><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setShowAddSection(false)}>취소</Btn><Btn onClick={addSection}>추가</Btn></div></div></Modal>)}
       {addFolderTarget&&(<Modal title="폴더 추가" onClose={()=>setAddFolderTarget(null)}><div style={{ ...S.col,gap:16 }}><Input label="폴더 이름" value={newFolderName} onChange={e=>setNewFolderName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addRootFolder(addFolderTarget)} placeholder="1주차, 실전문제 ..."/><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setAddFolderTarget(null)}>취소</Btn><Btn onClick={()=>addRootFolder(addFolderTarget)}>추가</Btn></div></div></Modal>)}
+      {confirmSection&&(<Modal title="섹션 삭제" onClose={()=>setConfirmSection(null)}><p style={{ fontSize:13,color:C.text2,marginBottom:20 }}>"{confirmSection.name}" 섹션과 포함된 모든 파일을 삭제하시겠습니까?</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setConfirmSection(null)}>취소</Btn><Btn variant="danger" onClick={()=>{deleteSection(confirmSection.id);setConfirmSection(null);}}>삭제</Btn></div></Modal>)}
+    </div>
+  );
+}
+
+// ─── CERT FILE ROW ─────────────────────────────────────────
+function CertFileRow({ file, onView, onDelete, deleting }) {
+  const [downloading, setDownloading] = useState(false);
+  async function handleDownload() {
+    if (!file.driveId) return;
+    setDownloading(true);
+    try {
+      const blob = await fetchFileBlob(file.driveId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href=url; a.download=file.name; a.click();
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    } catch(e) { console.error(e); } finally { setDownloading(false); }
+  }
+  return (
+    <div style={{ display:"flex",alignItems:"center",gap:8,padding:"6px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
+      <FileText size={10} color="rgba(255,255,255,0.4)"/>
+      <span style={{ flex:1,fontSize:10,color:"rgba(255,255,255,0.55)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span>
+      <button onClick={onView} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.5)",padding:2 }}><Eye size={10}/></button>
+      {file.driveId&&<button onClick={handleDownload} disabled={downloading} title="다운로드" style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.4)",padding:2 }}>{downloading?<Loader2 size={10} style={{ animation:"spin 1s linear infinite" }}/>:<Download size={10}/>}</button>}
+      <button onClick={onDelete} disabled={deleting} title="삭제" style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.4)",padding:2 }}>{deleting?<Loader2 size={10} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={10}/>}</button>
     </div>
   );
 }
@@ -1071,7 +1125,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
                             <span style={{ fontSize:10,color:"rgba(255,255,255,0.5)" }}>{cert.date?formatDate(cert.date):"날짜 미입력"}</span>
                             {status&&<span style={{ fontSize:10,fontWeight:500,padding:"2px 7px",borderRadius:99,background:status.color+"25",color:status.color }}>{status.text}</span>}
                           </div>
-                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<div key={file.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"6px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)" }}><FileText size={10} color="rgba(255,255,255,0.4)"/><span style={{ flex:1,fontSize:10,color:"rgba(255,255,255,0.55)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span><button onClick={()=>setViewingFile({...file,_catId:cat.id,_certId:cert.id})} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.5)",padding:2 }}><Eye size={10}/></button><button onClick={()=>handleDeleteFile(cat.id,cert.id,file)} disabled={deletingFile===file.id} style={{ background:"transparent",border:"none",cursor:"pointer",display:"flex",color:"rgba(255,255,255,0.4)",padding:2 }}>{deletingFile===file.id?<Loader2 size={10} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={10}/>}</button></div>))}</div>)}
+                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<CertFileRow key={file.id} file={file} catId={cat.id} certId={cert.id} onView={()=>setViewingFile({...file,_catId:cat.id,_certId:cert.id})} onDelete={()=>setConfirmDelete({type:"file",catId:cat.id,certId:cert.id,file})} deleting={deletingFile===file.id}/>))}</div>)}
                           {cert.note&&<div style={{ padding:"6px 16px",fontSize:10,color:"rgba(255,255,255,0.35)",background:"rgba(0,0,0,0.15)" }}>{cert.note}</div>}
                         </div>
                       );
@@ -1085,7 +1139,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
       </div>
       {showAddCat&&(<Modal title="카테고리 추가" onClose={()=>setShowAddCat(false)}><div style={{ ...S.col,gap:16 }}><Input label="카테고리 이름" value={newCat.name} onChange={e=>setNewCat(p=>({...p,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addCategory()} placeholder="어학, IT, 국가자격증 ..."/><Field label="색상"><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{SEC_COLORS.map(c=>(<button key={c} onClick={()=>setNewCat(p=>({...p,color:c}))} style={{ width:28,height:28,borderRadius:"50%",background:c,border:newCat.color===c?"3px solid white":"3px solid transparent",cursor:"pointer",outline:"none",opacity:newCat.color===c?1:0.5 }}/>))}</div></Field><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setShowAddCat(false)}>취소</Btn><Btn onClick={addCategory}>추가</Btn></div></div></Modal>)}
       {showAddCert&&(<Modal title="자격증 추가" onClose={()=>setShowAddCert(null)}><div style={{ ...S.col,gap:12 }}><Input label="자격증명 *" value={certForm.name} onChange={cf("name")} placeholder="TOEIC, OPIc ..."/><div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}><Input label="발급 기관" value={certForm.issuer} onChange={cf("issuer")} placeholder="ETS ..."/><Input label="점수/등급" value={certForm.score} onChange={cf("score")} placeholder="900, IM2 ..."/></div><div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}><Input label="취득일" type="date" value={certForm.date} onChange={cf("date")}/><Input label="만료일" type="date" value={certForm.expiry} onChange={cf("expiry")}/></div><Textarea label="메모" value={certForm.note} onChange={cf("note")} placeholder="갱신 요건 ..."/><Field label="카드 색상"><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{CERT_COLORS.map(c=>(<button key={c} onClick={()=>setCertForm(p=>({...p,color:c}))} style={{ width:28,height:28,borderRadius:"50%",background:c,border:certForm.color===c?"3px solid white":"3px solid transparent",cursor:"pointer",outline:"none" }}/>))}</div></Field><div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:4 }}><Btn variant="ghost" onClick={()=>setShowAddCert(null)}>취소</Btn><Btn onClick={()=>addCert(showAddCert)}>추가</Btn></div></div></Modal>)}
-      {confirmDelete&&(<Modal title="삭제 확인" onClose={()=>setConfirmDelete(null)}><p style={{ fontSize:13,color:C.text2,marginBottom:20 }}>{confirmDelete.type==="cat"?"이 카테고리와 포함된 모든 자격증을 삭제하시겠습니까?":"이 자격증을 삭제하시겠습니까?"}</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setConfirmDelete(null)}>취소</Btn><Btn variant="danger" onClick={()=>confirmDelete.type==="cat"?deleteCategory(confirmDelete.catId):deleteCert(confirmDelete.catId,confirmDelete.certId)}>삭제</Btn></div></Modal>)}
+      {confirmDelete&&(<Modal title="삭제 확인" onClose={()=>setConfirmDelete(null)}><p style={{ fontSize:13,color:C.text2,marginBottom:20 }}>{confirmDelete.type==="cat"?"이 카테고리와 포함된 모든 자격증을 삭제하시겠습니까?":confirmDelete.type==="cert"?"이 자격증을 삭제하시겠습니까?":`"${confirmDelete.file?.name}" 파일을 삭제하시겠습니까?`}</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setConfirmDelete(null)}>취소</Btn><Btn variant="danger" onClick={()=>{if(confirmDelete.type==="cat")deleteCategory(confirmDelete.catId);else if(confirmDelete.type==="cert")deleteCert(confirmDelete.catId,confirmDelete.certId);else handleDeleteFile(confirmDelete.catId,confirmDelete.certId,confirmDelete.file);}}>삭제</Btn></div></Modal>)}
     </div>
   );
 }
@@ -1101,6 +1155,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [confirmEvent, setConfirmEvent] = useState(null);
   const fld = k=>e=>setForm(p=>({...p,[k]:e.target.value}));
 
   useEffect(() => { handleImportFromGoogle({ silent: true }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1257,7 +1312,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
                   ):(
                     <button onClick={()=>syncEventToCalendar(e)} disabled={removingCal===e.id} title="Google 캘린더에 추가" style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text3,display:"flex",flexShrink:0 }}>{removingCal===e.id?<Loader2 size={13} style={{ animation:"spin 1s linear infinite" }}/>:<CalendarPlus size={13}/>}</button>
                   )}
-                  <button onClick={()=>deleteEvent(e.id)} disabled={removingCal===e.id} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex",flexShrink:0 }}>{removingCal===e.id?<Loader2 size={13} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={13}/>}</button>
+                  <button onClick={()=>setConfirmEvent(e)} disabled={removingCal===e.id} title="삭제" style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex",flexShrink:0 }}>{removingCal===e.id?<Loader2 size={13} style={{ animation:"spin 1s linear infinite" }}/>:<Trash2 size={13}/>}</button>
                 </div>
               );
             })}
@@ -1279,7 +1334,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
               {!selectedEvent.syncedToCalendar&&(
                 <Btn variant="success" icon={CalendarPlus} loading={removingCal===selectedEvent.id} onClick={async()=>{ await syncEventToCalendar(selectedEvent); setSelectedEvent(null); }}>Google 캘린더에 추가</Btn>
               )}
-              <Btn variant="danger" icon={Trash2} onClick={()=>deleteEvent(selectedEvent.id)}>삭제</Btn>
+              <Btn variant="danger" icon={Trash2} onClick={()=>{setSelectedEvent(null);setConfirmEvent(selectedEvent);}}>삭제</Btn>
             </div>
           </div>
         </Modal>
@@ -1318,6 +1373,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
           </div>
         </Modal>
       )}
+      {confirmEvent&&(<Modal title="일정 삭제" onClose={()=>setConfirmEvent(null)}><p style={{ fontSize:13,color:C.text2,marginBottom:20 }}>"{confirmEvent.title}" 일정을 삭제하시겠습니까?{confirmEvent.syncedToCalendar&&<span style={{ display:"block",marginTop:6,fontSize:12,color:C.warning }}>Google 캘린더에서도 함께 삭제됩니다.</span>}</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setConfirmEvent(null)}>취소</Btn><Btn variant="danger" loading={removingCal===confirmEvent.id} onClick={async()=>{await deleteEvent(confirmEvent.id);setConfirmEvent(null);}}>삭제</Btn></div></Modal>)}
     </div>
   );
 }
