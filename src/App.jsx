@@ -246,7 +246,22 @@ function FileViewer({ file, onClose, onRename }) {
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(file.name);
   const [renaming, setRenaming] = useState(false);
+  const [pdfNumPages, setPdfNumPages] = useState(0);
+  const [notesVisible, setNotesVisible] = useState(true);
+  const pdfContainerRef = useRef(null);
+  const pdfDocRef = useRef(null);
+  const blobUrlRef = useRef(null);
+  const notesKey = `pdf_notes_${file.driveId || file.id || file.name}`;
+  const [notes, setNotes] = useState(() => localStorage.getItem(notesKey) || "");
+  const notesTimer = useRef(null);
   const FIcon = isImage(file.name) ? Image : isPdf(file.name) ? FileText : File;
+  const narrow = window.innerWidth < 700;
+
+  function onNotesChange(val) {
+    setNotes(val);
+    clearTimeout(notesTimer.current);
+    notesTimer.current = setTimeout(() => localStorage.setItem(notesKey, val), 600);
+  }
 
   useEffect(() => {
     if (!file.driveId) { setState("no-drive"); return; }
@@ -254,13 +269,56 @@ function FileViewer({ file, onClose, onRename }) {
       setState("loading");
       try {
         const blob = await fetchFileBlob(file.driveId);
-        if (isText(file.name)) { setTextContent(await blob.text()); setState("text"); }
-        else if (isHtml(file.name)) { setTextContent(await blob.text()); setState("html"); }
-        else { const url = URL.createObjectURL(blob); setBlobUrl(url); setState(isImage(file.name)?"image":isPdf(file.name)?"pdf":"other"); }
+        if (isText(file.name)) { setTextContent(await blob.text()); setState("text"); return; }
+        if (isHtml(file.name)) { setTextContent(await blob.text()); setState("html"); return; }
+        const url = URL.createObjectURL(blob);
+        blobUrlRef.current = url; setBlobUrl(url);
+        if (isImage(file.name)) { setState("image"); return; }
+        if (isPdf(file.name)) {
+          try {
+            await loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js", () => !!window.pdfjsLib);
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+            const buf = await blob.arrayBuffer();
+            const doc = await window.pdfjsLib.getDocument({ data: buf }).promise;
+            pdfDocRef.current = doc; setPdfNumPages(doc.numPages); setState("pdf");
+          } catch { setState("pdf-fallback"); }
+          return;
+        }
+        setState("other");
       } catch { setState("error"); }
     })();
-    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+      clearTimeout(notesTimer.current);
+      if (pdfDocRef.current) { pdfDocRef.current.destroy(); pdfDocRef.current = null; }
+    };
   }, [file.driveId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (state !== "pdf" || !pdfDocRef.current) return;
+    const doc = pdfDocRef.current;
+    let cancelled = false;
+    (async () => {
+      const container = pdfContainerRef.current;
+      if (!container) return;
+      container.innerHTML = "";
+      const w = container.clientWidth || 640;
+      for (let i = 1; i <= doc.numPages; i++) {
+        if (cancelled) break;
+        const page = await doc.getPage(i);
+        const vp0 = page.getViewport({ scale: 1 });
+        const dpr = window.devicePixelRatio || 1;
+        const scale = (w / vp0.width) * dpr;
+        const vp = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = vp.width; canvas.height = vp.height;
+        canvas.style.cssText = `width:100%;height:auto;display:block;margin-bottom:10px;border-radius:6px;box-shadow:0 2px 16px rgba(0,0,0,0.5)`;
+        container.appendChild(canvas);
+        if (!cancelled) await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [state, pdfNumPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function saveRename() {
     if (!nameVal.trim() || nameVal === file.name) { setEditingName(false); return; }
@@ -270,42 +328,63 @@ function FileViewer({ file, onClose, onRename }) {
     finally { setRenaming(false); setEditingName(false); }
   }
 
+  const isPdfState = state === "pdf" || state === "pdf-fallback";
+
   return (
-    <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{ position:"fixed",inset:0,zIndex:60,background:"rgba(0,0,0,0.85)",backdropFilter:"blur(12px)",display:"flex",flexDirection:"column" }}>
-      <div style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border2}`,flexShrink:0 }}>
-        <div style={{ borderRadius:8,padding:6,background:C.accent+"18" }}><FIcon size={14} color={C.accent}/></div>
+    <div style={{ position:"fixed",inset:0,zIndex:60,background:"rgba(0,0,0,0.92)",backdropFilter:"blur(12px)",display:"flex",flexDirection:"column" }}>
+      {/* ── Header ── */}
+      <div style={{ display:"flex",alignItems:"center",gap:8,padding:"10px 16px",background:C.surface,borderBottom:`1px solid ${C.border2}`,flexShrink:0,flexWrap:"wrap" }}>
+        <div style={{ borderRadius:8,padding:6,background:C.accent+"18",flexShrink:0 }}><FIcon size={14} color={C.accent}/></div>
         {editingName ? (
           <input autoFocus value={nameVal} onChange={e=>setNameVal(e.target.value)}
             onKeyDown={e=>{ if(e.key==="Enter") saveRename(); if(e.key==="Escape"){setEditingName(false);setNameVal(file.name);} }}
-            style={{ flex:1, background:"transparent", border:"none", borderBottom:`1px solid ${C.accent}`, color:C.text1, fontSize:13, fontWeight:500, outline:"none", fontFamily:"inherit" }}/>
+            style={{ flex:1,minWidth:80,background:"transparent",border:"none",borderBottom:`1px solid ${C.accent}`,color:C.text1,fontSize:13,fontWeight:500,outline:"none",fontFamily:"inherit" }}/>
         ) : (
-          <span style={{ flex:1,fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span>
+          <span style={{ flex:1,minWidth:0,fontSize:13,fontWeight:500,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{file.name}</span>
         )}
-        {onRename && !editingName && (
-          <button onClick={()=>{setEditingName(true);setNameVal(file.name);}} title="파일 이름 변경"
-            style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text2,display:"flex",flexShrink:0 }}>
-            <Pencil size={13}/>
-          </button>
-        )}
-        {editingName && (
-          <button onClick={saveRename} disabled={renaming}
-            style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.success,display:"flex",flexShrink:0 }}>
-            {renaming ? <Loader2 size={13} style={{ animation:"spin 1s linear infinite" }}/> : <Check size={13}/>}
-          </button>
-        )}
-        {blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.text2,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none" }}><Download size={12}/>다운로드</a>}
-        {file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.text2,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={12}/>Drive에서 보기</a>}
-        <button onClick={onClose} style={{ background:"transparent",border:"none",cursor:"pointer",padding:6,color:C.text2,display:"flex",borderRadius:8 }}><X size={16}/></button>
+        {onRename&&!editingName&&<button onClick={()=>{setEditingName(true);setNameVal(file.name);}} title="이름 변경" style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text2,display:"flex",flexShrink:0 }}><Pencil size={13}/></button>}
+        {editingName&&<button onClick={saveRename} disabled={renaming} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.success,display:"flex",flexShrink:0 }}>{renaming?<Loader2 size={13} style={{ animation:"spin 1s linear infinite" }}/>:<Check size={13}/>}</button>}
+        {isPdfState&&<button onClick={()=>setNotesVisible(v=>!v)} title="메모 패널" style={{ background:notesVisible?C.accent+"22":"transparent",border:`1px solid ${notesVisible?C.accent+"44":C.border2}`,borderRadius:8,cursor:"pointer",padding:"5px 10px",color:notesVisible?C.accent:C.text2,display:"flex",alignItems:"center",gap:5,fontSize:12,flexShrink:0 }}><Pencil size={11}/>메모</button>}
+        {blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.text2,padding:"5px 10px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none",flexShrink:0 }}><Download size={12}/>다운로드</a>}
+        {file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.text2,padding:"5px 10px",borderRadius:8,border:`1px solid ${C.border2}`,textDecoration:"none",flexShrink:0 }}><ExternalLink size={12}/>Drive</a>}
+        <button onClick={onClose} style={{ background:"transparent",border:"none",cursor:"pointer",padding:6,color:C.text2,display:"flex",borderRadius:8,flexShrink:0 }}><X size={16}/></button>
       </div>
-      <div style={{ flex:1,overflow:"auto",display:"flex",alignItems:"center",justifyContent:"center",padding:24 }}>
-        {state==="loading"&&<div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:12 }}><Loader2 size={28} color={C.accent} style={{ animation:"spin 1s linear infinite" }}/><span style={{ fontSize:13,color:C.text2 }}>불러오는 중...</span></div>}
-        {state==="error"&&<div style={{ textAlign:"center" }}><p style={{ fontSize:14,color:C.danger,marginBottom:8 }}>파일을 불러올 수 없습니다.</p>{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ fontSize:13,color:C.accent }}>Drive에서 열기</a>}</div>}
-        {state==="no-drive"&&<p style={{ fontSize:14,color:C.text2 }}>로컬 파일입니다.</p>}
-        {state==="image"&&<img src={blobUrl} alt={file.name} style={{ maxWidth:"100%",maxHeight:"100%",borderRadius:12,boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}/>}
-        {state==="pdf"&&<iframe src={blobUrl} title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8 }}/>}
-        {state==="text"&&<div style={{ width:"100%",maxWidth:800,background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border2}` }}><pre style={{ fontSize:12,color:C.text2,lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word",overflowY:"auto",maxHeight:"70vh" }}>{textContent}</pre></div>}
-        {state==="html"&&<iframe srcDoc={textContent} sandbox="allow-scripts" title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8,background:"white" }}/>}
-        {state==="other"&&<div style={{ textAlign:"center" }}><div style={{ borderRadius:20,padding:24,background:C.surface2,display:"inline-flex",marginBottom:16 }}><File size={40} color={C.text3}/></div><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>이 형식은 뷰어에서 직접 보기가 불가능합니다.</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>다운로드</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive에서 열기</a>}</div></div>}
+      {/* ── Body ── */}
+      <div style={{ flex:1,overflow:"hidden",display:"flex",flexDirection:isPdfState&&notesVisible&&narrow?"column":"row",minHeight:0 }}>
+        {/* PDF page count badge */}
+        {state==="pdf"&&pdfNumPages>0&&(
+          <div style={{ position:"absolute",bottom:narrow&&notesVisible?244:16,right:isPdfState&&notesVisible?(narrow?16:"31%"):"16px",zIndex:10,fontSize:11,color:C.text3,background:C.surface2,border:`1px solid ${C.border}`,borderRadius:99,padding:"3px 10px",pointerEvents:"none" }}>
+            {pdfNumPages}페이지
+          </div>
+        )}
+        {/* Main content */}
+        <div style={{ flex:isPdfState&&notesVisible?7:1,overflow:"auto",display:"flex",alignItems:state==="pdf"?"flex-start":"center",justifyContent:state==="pdf"?"flex-start":"center",padding:state==="pdf"?"16px 16px 48px":"24px",minHeight:0,minWidth:0 }}>
+          {state==="loading"&&<div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:12 }}><Loader2 size={28} color={C.accent} style={{ animation:"spin 1s linear infinite" }}/><span style={{ fontSize:13,color:C.text2 }}>불러오는 중...</span></div>}
+          {state==="error"&&<div style={{ textAlign:"center" }}><p style={{ fontSize:14,color:C.danger,marginBottom:8 }}>파일을 불러올 수 없습니다.</p>{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ fontSize:13,color:C.accent }}>Drive에서 열기</a>}</div>}
+          {state==="no-drive"&&<p style={{ fontSize:14,color:C.text2 }}>로컬 파일입니다.</p>}
+          {state==="image"&&<img src={blobUrl} alt={file.name} style={{ maxWidth:"100%",maxHeight:"100%",borderRadius:12,boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}/>}
+          {state==="pdf"&&<div ref={pdfContainerRef} style={{ width:"100%",maxWidth:900,margin:"0 auto" }}/>}
+          {state==="pdf-fallback"&&<div style={{ textAlign:"center",padding:24 }}><FileText size={40} color={C.text3} style={{ marginBottom:16 }}/><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>PDF 렌더러를 불러올 수 없습니다.</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>다운로드</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive에서 열기</a>}</div></div>}
+          {state==="text"&&<div style={{ width:"100%",maxWidth:800,background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border2}` }}><pre style={{ fontSize:12,color:C.text2,lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word",overflowY:"auto",maxHeight:"70vh" }}>{textContent}</pre></div>}
+          {state==="html"&&<iframe srcDoc={textContent} sandbox="allow-scripts" title={file.name} style={{ width:"100%",height:"100%",border:"none",borderRadius:8,background:"white" }}/>}
+          {state==="other"&&<div style={{ textAlign:"center" }}><div style={{ borderRadius:20,padding:24,background:C.surface2,display:"inline-flex",marginBottom:16 }}><File size={40} color={C.text3}/></div><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>이 형식은 뷰어에서 직접 보기가 불가능합니다.</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>다운로드</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive에서 열기</a>}</div></div>}
+        </div>
+        {/* Notes panel */}
+        {isPdfState&&notesVisible&&(
+          <div style={{ flex:3,display:"flex",flexDirection:"column",borderLeft:narrow?"none":`1px solid ${C.border2}`,borderTop:narrow?`1px solid ${C.border2}`:"none",background:C.surface,minHeight:narrow?180:0,maxHeight:narrow?220:"none",minWidth:0 }}>
+            <div style={{ padding:"8px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:6,flexShrink:0 }}>
+              <Pencil size={10} color={C.text3}/>
+              <span style={{ fontSize:11,fontWeight:600,color:C.text2,letterSpacing:"0.04em",flex:1 }}>메모</span>
+              {notes&&<span style={{ fontSize:10,color:C.text3 }}>자동 저장</span>}
+            </div>
+            <textarea
+              value={notes}
+              onChange={e=>onNotesChange(e.target.value)}
+              placeholder={"이 PDF에 대한 메모를 여기에 입력하세요.\n\n요점 정리, 학습 내용 등..."}
+              style={{ flex:1,resize:"none",background:"transparent",border:"none",color:C.text1,padding:"12px 14px",fontSize:13,lineHeight:1.7,outline:"none",fontFamily:"inherit" }}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
