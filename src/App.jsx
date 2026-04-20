@@ -159,6 +159,21 @@ function isPdf(name) { return getExt(name)==="pdf"; }
 function isText(name) { return ["txt","md","json","csv","js","ts","jsx","tsx","css","xml","yaml","yml"].includes(getExt(name)); }
 function isHtml(name) { return getExt(name) === "html"; }
 
+const RECENT_KEY = "career_recent_files";
+function addRecentFile(file, sectionName, sectionColor) {
+  const prev = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+  const filtered = prev.filter(f => f.id !== file.id);
+  const entry = { id:file.id, name:file.name, driveId:file.driveId, webViewLink:file.webViewLink, sectionName, sectionColor, ts:Date.now() };
+  localStorage.setItem(RECENT_KEY, JSON.stringify([entry, ...filtered].slice(0, 8)));
+}
+function getRecentFiles() { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); }
+function formatTimeAgo(ts) {
+  const d = Math.floor((Date.now() - ts) / 86400000);
+  if (d === 0) return "오늘"; if (d === 1) return "어제";
+  if (d < 7) return `${d}일 전`; if (d < 30) return `${Math.floor(d/7)}주 전`;
+  return `${Math.floor(d/30)}개월 전`;
+}
+
 const C = {
   bg:"#080c14", surface:"#0f1521", surface2:"#161e2e", surface3:"#1c2640",
   border:"rgba(255,255,255,0.06)", border2:"rgba(255,255,255,0.10)",
@@ -460,12 +475,13 @@ function CountdownBanner({ events }) {
 }
 
 // ─── DASHBOARD ─────────────────────────────────────────────
-function Dashboard({ library, certCategories, events, setPage, userInfo }) {
+function Dashboard({ library, certCategories, events, setPage, userInfo, onOpenFile }) {
   const countFiles = (n) => (n.files||[]).length + (n.folders||[]).reduce((b,f) => b + countFiles(f), 0);
   const totalFiles = library.reduce((a,s) => a + countFiles(s), 0);
   const totalCerts = certCategories.reduce((a,c)=>a+(c.certs||[]).length,0);
   const nextExam   = events.filter(e=>e.isDday&&diffDays(e.date)>=0).sort((a,b)=>diffDays(a.date)-diffDays(b.date))[0];
   const upcoming   = [...events].filter(e=>diffDays(e.date)>=0).sort((a,b)=>new Date(a.date)-new Date(b.date)).slice(0,5);
+  const recentFiles = useMemo(() => getRecentFiles(), []);
   const expiringCerts = useMemo(() => {
     const results = [];
     certCategories.forEach(cat => (cat.certs||[]).forEach(cert => {
@@ -523,6 +539,25 @@ function Dashboard({ library, certCategories, events, setPage, userInfo }) {
                   </div>
                   <span style={{ fontSize:11,fontWeight:700,color:urgentColor,flexShrink:0 }}>{cert._daysLeft === 0 ? "오늘 만료" : `D-${cert._daysLeft}`}</span>
                 </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {recentFiles.length > 0 && (
+        <div style={{ ...S.card,padding:20,marginTop:16 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:16 }}><Clock size={13} color={C.accent}/><span style={{ fontSize:13,fontWeight:600,color:C.text1 }}>최근 열람</span></div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8 }}>
+            {recentFiles.map(f=>{
+              const FIcon=isPdf(f.name)?FileText:isImage(f.name)?Image:File;
+              return (
+                <button key={f.id} onClick={()=>onOpenFile(f)} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,background:C.surface2,border:`1px solid ${C.border}`,cursor:"pointer",textAlign:"left",fontFamily:"inherit" }}>
+                  <div style={{ borderRadius:7,padding:5,background:(f.sectionColor||C.accent)+"22",flexShrink:0 }}><FIcon size={12} color={f.sectionColor||C.accent}/></div>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontSize:12,color:C.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{f.name}</div>
+                    <div style={{ fontSize:10,color:C.text3,marginTop:1 }}>{f.sectionName} · {formatTimeAgo(f.ts)}</div>
+                  </div>
+                </button>
               );
             })}
           </div>
@@ -843,7 +878,7 @@ function Library({ library, onChange, driveFolderId }) {
                       file={file} color={section.color} depth={0}
                       onDelete={f=>handleDeleteFile(section.id,f,null)}
                       onRename={(f,n)=>handleRenameFile(section.id,f,n,null)}
-                      onView={f=>setViewingFile({...f,_sectionId:section.id,_folderId:null})}
+                      onView={f=>{ addRecentFile(f, section.subject, section.color); setViewingFile({...f,_sectionId:section.id,_folderId:null}); }}
                       onMove={f=>setMovingFile({file:f, sectionId:section.id, folderId:null})}
                       deleting={deletingFile}/>
                   </div>
@@ -853,7 +888,7 @@ function Library({ library, onChange, driveFolderId }) {
                   <FolderTree key={folder.id} folder={folder} sectionId={section.id} sectionColor={section.color} depth={0}
                     onDeleteFile={handleDeleteFile}
                     onRenameFile={handleRenameFile}
-                    onViewFile={(f,fid)=>setViewingFile({...f,_sectionId:section.id,_folderId:fid})}
+                    onViewFile={(f,fid)=>{ addRecentFile(f, section.subject, section.color); setViewingFile({...f,_sectionId:section.id,_folderId:fid}); }}
                     onMoveFile={(f,sid,fid)=>setMovingFile({file:f, sectionId:sid, folderId:fid})}
                     onDeleteFolder={handleDeleteFolder}
                     onRenameFolder={handleRenameFolder}
@@ -988,7 +1023,7 @@ function Certificates({ certCategories, onChange, driveFolderId }) {
                             <span style={{ fontSize:10,color:"rgba(255,255,255,0.5)" }}>{cert.date?formatDate(cert.date):"날짜 미입력"}</span>
                             {status&&<span style={{ fontSize:10,fontWeight:500,padding:"2px 7px",borderRadius:99,background:status.color+"25",color:status.color }}>{status.text}</span>}
                           </div>
-                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<CertFileRow key={file.id} file={file} catId={cat.id} certId={cert.id} onView={()=>setViewingFile({...file,_catId:cat.id,_certId:cert.id})} onDelete={()=>setConfirmDelete({type:"file",catId:cat.id,certId:cert.id,file})} deleting={deletingFile===file.id}/>))}</div>)}
+                          {(cert.files||[]).length>0&&(<div style={{ background:"rgba(0,0,0,0.15)",borderTop:"1px solid rgba(255,255,255,0.06)" }}>{(cert.files||[]).map(file=>(<CertFileRow key={file.id} file={file} catId={cat.id} certId={cert.id} onView={()=>{ addRecentFile(file, cat.name, cat.color); setViewingFile({...file,_catId:cat.id,_certId:cert.id}); }} onDelete={()=>setConfirmDelete({type:"file",catId:cat.id,certId:cert.id,file})} deleting={deletingFile===file.id}/>))}</div>)}
                           {cert.note&&<div style={{ padding:"6px 16px",fontSize:10,color:"rgba(255,255,255,0.35)",background:"rgba(0,0,0,0.15)" }}>{cert.note}</div>}
                         </div>
                       );
@@ -1399,6 +1434,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userInfo, setUserInfo] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [quickViewFile, setQuickViewFile] = useState(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [calendarId, setCalendarId] = useState(()=>localStorage.getItem("career_cal_id")||null);
 
@@ -1443,7 +1479,7 @@ export default function App() {
   const mainContent = searchQuery.trim()
     ? <SearchResults query={searchQuery.trim()} library={data.library} certCategories={data.certCategories} events={data.events} setPage={setPage} clearSearch={clearSearch}/>
     : {
-        dashboard:<Dashboard library={data.library} certCategories={data.certCategories} events={data.events} setPage={setPage} userInfo={userInfo}/>,
+        dashboard:<Dashboard library={data.library} certCategories={data.certCategories} events={data.events} setPage={setPage} userInfo={userInfo} onOpenFile={setQuickViewFile}/>,
         library:  <Library library={data.library} onChange={updateLibrary} driveFolderId={driveFolderIdRef.current}/>,
         certs:    <Certificates certCategories={data.certCategories} onChange={updateCerts} driveFolderId={driveFolderIdRef.current}/>,
         scheduler:<Scheduler events={data.events} onChange={updateEvents} calendarId={calendarId} setCalendarId={handleSetCalendarId}/>,
@@ -1456,6 +1492,7 @@ export default function App() {
       <style>{globalStyle}</style>
       <style>{`@media(min-width:768px){.sidebar-desktop{display:flex!important;flex-direction:column;}.mobile-topbar{display:none!important;}}`}</style>
       <ToastContainer/>
+      {quickViewFile && <FileViewer file={quickViewFile} onClose={()=>setQuickViewFile(null)}/>}
       <div style={{ display:"flex",height:"100vh",overflow:"hidden",background:C.bg }}>
         <div className="sidebar-desktop" style={{ display:"none",flexShrink:0,background:C.surface,borderRight:`1px solid ${C.border}` }}>
           <Sidebar {...sidebarProps}/>
