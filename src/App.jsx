@@ -127,23 +127,56 @@ async function removeFromGoogleCalendar(googleEventId, calId) {
   try { await window.gapi.client.calendar.events.delete({ calendarId: calId, eventId: googleEventId }); }
   catch(e) { console.warn("Calendar delete failed:", e); }
 }
+async function updateGoogleCalendarEvent(googleEventId, calId, event) {
+  const start = event.date;
+  const [y, m, d] = start.split("-").map(Number);
+  const end = new Date(y, m - 1, d + 1).toLocaleDateString("sv-SE");
+  await window.gapi.client.calendar.events.patch({
+    calendarId: calId, eventId: googleEventId,
+    resource: { summary: event.title, description: event.note || "", start: { date: start }, end: { date: end }, colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" },
+  });
+}
 async function fetchGoogleCalendarEvents(calId, existingEvents) {
-  const knownGoogleIds = new Set(existingEvents.map(e => e.googleEventId).filter(Boolean));
   const now = new Date();
   const timeMin = new Date(now.getFullYear(), now.getMonth() - 3, 1).toISOString();
   const timeMax = new Date(now.getFullYear(), now.getMonth() + 12, 31).toISOString();
   const res = await window.gapi.client.calendar.events.list({ calendarId: calId, timeMin, timeMax, singleEvents: true, orderBy: "startTime", maxResults: 500 });
   const googleEvents = res.result.items || [];
-  const newEvents = [];
+  const colorToType = { "11": "exam", "10": "cert", "9": "study" };
+  const geById = new Map(googleEvents.map(ge => [ge.id, ge]));
+  const knownGoogleIds = new Set(existingEvents.map(e => e.googleEventId).filter(Boolean));
+  const tMin = new Date(timeMin), tMax = new Date(timeMax);
+
+  const newEvents = [], updatedEvents = [], deletedLocalIds = [];
+
+  // Check existing synced events for deletions and updates
+  for (const localEv of existingEvents) {
+    if (!localEv.googleEventId || !localEv.syncedToCalendar) continue;
+    const evDate = new Date(localEv.date + "T12:00:00");
+    if (evDate < tMin || evDate > tMax) continue; // outside fetch range, skip
+    const ge = geById.get(localEv.googleEventId);
+    if (!ge) {
+      deletedLocalIds.push(localEv.id); // deleted in Google Calendar
+    } else {
+      const geDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
+      const geTitle = ge.summary || "(제목 없음)";
+      const geNote = ge.description || "";
+      const geType = colorToType[ge.colorId] || localEv.type;
+      if (geDate !== localEv.date || geTitle !== localEv.title || geNote !== localEv.note || geType !== localEv.type) {
+        updatedEvents.push({ id: localEv.id, title: geTitle, date: geDate, type: geType, note: geNote });
+      }
+    }
+  }
+
+  // Find new Google Calendar events not yet in CareerKit
   for (const ge of googleEvents) {
     if (knownGoogleIds.has(ge.id)) continue;
     const rawDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
     if (!rawDate) continue;
-    const colorToType = { "11": "exam", "10": "cert", "9": "study" };
-    const type = colorToType[ge.colorId] || "other";
-    newEvents.push({ id: uid(), title: ge.summary || "(제목 없음)", date: rawDate, type, note: ge.description || "", isDday: true, syncCal: true, googleEventId: ge.id, syncedToCalendar: true, importedFromCalendar: true });
+    newEvents.push({ id: uid(), title: ge.summary || "(제목 없음)", date: rawDate, type: colorToType[ge.colorId] || "other", note: ge.description || "", isDday: true, syncCal: true, googleEventId: ge.id, syncedToCalendar: true, importedFromCalendar: true });
   }
-  return newEvents;
+
+  return { newEvents, updatedEvents, deletedLocalIds };
 }
 
 // ─── UTILS ─────────────────────────────────────────────────
@@ -1065,9 +1098,19 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
     try {
       let calId = calendarId;
       if (!calId) { calId = await getOrCreateCareerCalendar(); setCalendarId(calId); }
-      const newEvs = await fetchGoogleCalendarEvents(calId, events);
-      if (newEvs.length > 0) { onChange([...events, ...newEvs]); setImportResult({ count: newEvs.length }); setTimeout(()=>setImportResult(null), 4000); }
-      else if (!silent) { setImportResult({ count: 0 }); setTimeout(()=>setImportResult(null), 3000); }
+      const { newEvents, updatedEvents, deletedLocalIds } = await fetchGoogleCalendarEvents(calId, events);
+      const hasChanges = newEvents.length > 0 || updatedEvents.length > 0 || deletedLocalIds.length > 0;
+      if (hasChanges) {
+        let next = events.filter(e => !deletedLocalIds.includes(e.id));
+        next = next.map(e => { const u = updatedEvents.find(x => x.id === e.id); return u ? { ...e, ...u } : e; });
+        next = [...next, ...newEvents];
+        onChange(next);
+        setImportResult({ added: newEvents.length, updated: updatedEvents.length, deleted: deletedLocalIds.length });
+        setTimeout(() => setImportResult(null), 4000);
+      } else if (!silent) {
+        setImportResult({ added: 0, updated: 0, deleted: 0 });
+        setTimeout(() => setImportResult(null), 3000);
+      }
     } catch(e) { console.error(e); if (!silent) addToast("error","Google 캘린더 가져오기에 실패했습니다."); }
     finally { setImporting(false); }
   }
@@ -1078,6 +1121,13 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   async function addEvent() {
     if (!form.title.trim()||!form.date) return;
     if (editingEventId) {
+      const existingEv = events.find(e => e.id === editingEventId);
+      if (existingEv?.googleEventId && calendarId) {
+        setAddingCal(true);
+        try { await updateGoogleCalendarEvent(existingEv.googleEventId, calendarId, { ...existingEv, ...form }); }
+        catch(e) { console.error(e); }
+        finally { setAddingCal(false); }
+      }
       onChange(events.map(e=>e.id!==editingEventId?e:{...e,title:form.title,date:form.date,type:form.type,note:form.note,isDday:form.isDday}));
       setEditingEventId(null); setShowAdd(false); setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true });
       addToast("success","일정이 수정되었습니다.");
@@ -1136,14 +1186,18 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
         </div>
       </div>
 
-      {importResult !== null && (
-        <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderRadius:12,marginBottom:16,background:importResult.count>0?`${C.success}18`:C.surface3,border:`1px solid ${importResult.count>0?C.success+"40":C.border2}` }}>
-          <CalendarCheck size={14} color={importResult.count>0?C.success:C.text3}/>
-          <span style={{ fontSize:13,color:importResult.count>0?C.success:C.text2 }}>
-            {importResult.count>0 ? `Google 캘린더에서 ${importResult.count}개 일정을 가져왔습니다.` : "가져올 새 일정이 없습니다."}
-          </span>
-        </div>
-      )}
+      {importResult !== null && (()=>{
+        const total = importResult.added + importResult.updated + importResult.deleted;
+        const parts = [importResult.added>0&&`추가 ${importResult.added}건`, importResult.updated>0&&`수정 ${importResult.updated}건`, importResult.deleted>0&&`삭제 ${importResult.deleted}건`].filter(Boolean);
+        return (
+          <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderRadius:12,marginBottom:16,background:total>0?`${C.success}18`:C.surface3,border:`1px solid ${total>0?C.success+"40":C.border2}` }}>
+            <CalendarCheck size={14} color={total>0?C.success:C.text3}/>
+            <span style={{ fontSize:13,color:total>0?C.success:C.text2 }}>
+              {total>0 ? `Google 캘린더 동기화 완료 (${parts.join(", ")})` : "동기화할 변경사항이 없습니다."}
+            </span>
+          </div>
+        );
+      })()}
 
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
         <button onClick={()=>view==="month"?setCursor(p=>new Date(p.getFullYear(),p.getMonth()-1,1)):setCursor(p=>{const d=new Date(p);d.setDate(d.getDate()-7);return d;})} style={{ background:"transparent",border:"none",cursor:"pointer",padding:6,color:C.text2,display:"flex",borderRadius:8 }}><ChevronLeft size={15}/></button>
