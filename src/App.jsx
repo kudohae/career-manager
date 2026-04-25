@@ -6,7 +6,7 @@ import {
   GraduationCap, Zap, LogOut, Cloud, RefreshCw,
   Eye, Loader2, Menu, ChevronDown, ChevronRight as CR,
   Download, Pencil, ExternalLink, CalendarPlus, CalendarCheck,
-  MoveRight, Search, Bell, TrendingUp, Star
+  MoveRight, Search, Bell, TrendingUp, Star, ScrollText
 } from "lucide-react";
 
 // ─── GOOGLE API ────────────────────────────────────────────
@@ -112,14 +112,21 @@ async function getOrCreateCareerCalendar() {
   localStorage.setItem("career_cal_id", created.result.id);
   return created.result.id;
 }
+function buildCalendarTimes(event) {
+  const date = event.date;
+  const [y, m, d] = date.split("-").map(Number);
+  if (event.hasTime && event.startTime && event.endTime) {
+    const tz = "Asia/Seoul";
+    return { start: { dateTime: `${date}T${event.startTime}:00`, timeZone: tz }, end: { dateTime: `${date}T${event.endTime}:00`, timeZone: tz } };
+  }
+  const endDate = new Date(y, m - 1, d + 1).toLocaleDateString("sv-SE");
+  return { start: { date }, end: { date: endDate } };
+}
 async function addToGoogleCalendar(event, calId) {
-  const start = event.date;
-  const [y, m, d] = start.split("-").map(Number);
-  const endDate = new Date(y, m - 1, d + 1);
-  const end = endDate.toLocaleDateString("sv-SE");
+  const times = buildCalendarTimes(event);
   const res = await window.gapi.client.calendar.events.insert({
     calendarId: calId,
-    resource: { summary: event.title, description: event.note || "", start: { date: start }, end: { date: end }, colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" },
+    resource: { summary: event.title, description: event.note || "", ...times, colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" },
   });
   return res.result.id;
 }
@@ -128,12 +135,10 @@ async function removeFromGoogleCalendar(googleEventId, calId) {
   catch(e) { console.warn("Calendar delete failed:", e); }
 }
 async function updateGoogleCalendarEvent(googleEventId, calId, event) {
-  const start = event.date;
-  const [y, m, d] = start.split("-").map(Number);
-  const end = new Date(y, m - 1, d + 1).toLocaleDateString("sv-SE");
+  const times = buildCalendarTimes(event);
   await window.gapi.client.calendar.events.patch({
     calendarId: calId, eventId: googleEventId,
-    resource: { summary: event.title, description: event.note || "", start: { date: start }, end: { date: end }, colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" },
+    resource: { summary: event.title, description: event.note || "", ...times, colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" },
   });
 }
 async function fetchGoogleCalendarEvents(calId, existingEvents) {
@@ -162,8 +167,11 @@ async function fetchGoogleCalendarEvents(calId, existingEvents) {
       const geTitle = ge.summary || "(제목 없음)";
       const geNote = ge.description || "";
       const geType = colorToType[ge.colorId] || localEv.type;
-      if (geDate !== localEv.date || geTitle !== localEv.title || geNote !== localEv.note || geType !== localEv.type) {
-        updatedEvents.push({ id: localEv.id, title: geTitle, date: geDate, type: geType, note: geNote });
+      const geHasTime = !!ge.start?.dateTime;
+      const geStartTime = geHasTime ? ge.start.dateTime.split("T")[1]?.slice(0,5) : null;
+      const geEndTime = geHasTime ? ge.end?.dateTime?.split("T")[1]?.slice(0,5) : null;
+      if (geDate !== localEv.date || geTitle !== localEv.title || geNote !== localEv.note || geType !== localEv.type || geHasTime !== (localEv.hasTime||false) || geStartTime !== (localEv.startTime||null) || geEndTime !== (localEv.endTime||null)) {
+        updatedEvents.push({ id: localEv.id, title: geTitle, date: geDate, type: geType, note: geNote, hasTime: geHasTime, startTime: geStartTime, endTime: geEndTime });
       }
     }
   }
@@ -173,7 +181,10 @@ async function fetchGoogleCalendarEvents(calId, existingEvents) {
     if (knownGoogleIds.has(ge.id)) continue;
     const rawDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
     if (!rawDate) continue;
-    newEvents.push({ id: uid(), title: ge.summary || "(제목 없음)", date: rawDate, type: colorToType[ge.colorId] || "other", note: ge.description || "", isDday: true, syncCal: true, googleEventId: ge.id, syncedToCalendar: true, importedFromCalendar: true });
+    const newHasTime = !!ge.start?.dateTime;
+    const newStartTime = newHasTime ? ge.start.dateTime.split("T")[1]?.slice(0,5) : null;
+    const newEndTime = newHasTime ? ge.end?.dateTime?.split("T")[1]?.slice(0,5) : null;
+    newEvents.push({ id: uid(), title: ge.summary || "(제목 없음)", date: rawDate, type: colorToType[ge.colorId] || "other", note: ge.description || "", isDday: true, syncCal: true, googleEventId: ge.id, syncedToCalendar: true, importedFromCalendar: true, hasTime: newHasTime, startTime: newStartTime, endTime: newEndTime });
   }
 
   return { newEvents, updatedEvents, deletedLocalIds };
@@ -222,7 +233,11 @@ const EVENT_TYPES = {
   other: { label:"기타",       color:"#8892a4" },
 };
 const WEEKDAYS  = ["일","월","화","수","목","금","토"];
-const EMPTY_DATA = { library:[], certCategories:[], events:[] };
+const EMPTY_DATA = { library:[], certCategories:[], events:[], coverLetterQuestions:[] };
+function formatEventTime(e) {
+  if (!e.hasTime || !e.startTime) return "";
+  return `${e.startTime}${e.endTime?`~${e.endTime}`:""}`;
+}
 
 const S = {
   card:  { background:C.surface, border:`1px solid ${C.border2}`, borderRadius:16 },
@@ -1081,7 +1096,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   const [view, setView] = useState("month");
   const [cursor, setCursor] = useState(new Date());
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true });
+  const [form, setForm] = useState({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
   const [addingCal, setAddingCal] = useState(false);
   const [removingCal, setRemovingCal] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -1115,8 +1130,8 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
     finally { setImporting(false); }
   }
 
-  function openAdd(date=today()){ setEditingEventId(null); setForm({ title:"",date,type:"exam",note:"",isDday:true,syncCal:true }); setShowAdd(true); }
-  function openEdit(ev){ setEditingEventId(ev.id); setForm({ title:ev.title,date:ev.date,type:ev.type,note:ev.note||"",isDday:ev.isDday,syncCal:false }); setShowAdd(true); }
+  function openAdd(date=today()){ setEditingEventId(null); setForm({ title:"",date,type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" }); setShowAdd(true); }
+  function openEdit(ev){ setEditingEventId(ev.id); setForm({ title:ev.title,date:ev.date,type:ev.type,note:ev.note||"",isDday:ev.isDday,syncCal:false,hasTime:ev.hasTime||false,startTime:ev.startTime||"09:00",endTime:ev.endTime||"10:00" }); setShowAdd(true); }
 
   async function addEvent() {
     if (!form.title.trim()||!form.date) return;
@@ -1128,8 +1143,8 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
         catch(e) { console.error(e); }
         finally { setAddingCal(false); }
       }
-      onChange(events.map(e=>e.id!==editingEventId?e:{...e,title:form.title,date:form.date,type:form.type,note:form.note,isDday:form.isDday}));
-      setEditingEventId(null); setShowAdd(false); setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true });
+      onChange(events.map(e=>e.id!==editingEventId?e:{...e,title:form.title,date:form.date,type:form.type,note:form.note,isDday:form.isDday,hasTime:form.hasTime,startTime:form.hasTime?form.startTime:null,endTime:form.hasTime?form.endTime:null}));
+      setEditingEventId(null); setShowAdd(false); setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
       addToast("success","일정이 수정되었습니다.");
       return;
     }
@@ -1141,8 +1156,8 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
         googleEventId = await addToGoogleCalendar({ ...form }, calId);
       }
     } catch(e) { console.error(e); } finally { setAddingCal(false); }
-    onChange([...events,{ ...form, id:uid(), isDday:form.isDday, googleEventId, syncedToCalendar: !!googleEventId }]);
-    setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true });
+    onChange([...events,{ ...form, id:uid(), isDday:form.isDday, googleEventId, syncedToCalendar: !!googleEventId, hasTime:form.hasTime, startTime:form.hasTime?form.startTime:null, endTime:form.hasTime?form.endTime:null }]);
+    setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
     setShowAdd(false);
   }
 
@@ -1266,7 +1281,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
                       {e.importedFromCalendar&&<span style={{ fontSize:9,fontWeight:600,padding:"1px 5px",borderRadius:99,background:`${C.accent}20`,color:C.accent,flexShrink:0,whiteSpace:"nowrap" }}>Google 가져옴</span>}
                     </div>
                   </div>
-                  <span style={{ fontSize:11,color:C.text3,flexShrink:0 }}>{formatDate(e.date)}</span>
+                  <span style={{ fontSize:11,color:C.text3,flexShrink:0 }}>{formatDate(e.date)}{e.hasTime&&e.startTime?` ${formatEventTime(e)}`:""}</span>
                   {e.isDday&&<span style={{ fontSize:11,fontWeight:700,flexShrink:0,padding:"2px 8px",borderRadius:99,background:diff<0?"rgba(148,163,184,0.1)":diff===0?C.danger+"20":C.accent+"18",color:diff<0?C.text3:diff===0?C.danger:C.accent }}>{dDayLabel(diff)}</span>}
                   {e.syncedToCalendar?(
                     <div title="Google 캘린더에 동기화됨" style={{ display:"flex",padding:4,color:C.success,flexShrink:0 }}><CalendarCheck size={13}/></div>
@@ -1289,7 +1304,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
               {selectedEvent.isDday&&<div style={{ fontSize:11,padding:"3px 10px",borderRadius:99,background:C.accent+"18",color:C.accent }}>D-Day {dDayLabel(diffDays(selectedEvent.date))}</div>}
               {selectedEvent.syncedToCalendar&&<div style={{ fontSize:11,padding:"3px 10px",borderRadius:99,background:C.success+"18",color:C.success,display:"flex",alignItems:"center",gap:4 }}><CalendarCheck size={10}/>Google 캘린더 연동됨</div>}
             </div>
-            <div style={{ fontSize:13,color:C.text2 }}>{formatDate(selectedEvent.date)}</div>
+            <div style={{ fontSize:13,color:C.text2 }}>{formatDate(selectedEvent.date)}{selectedEvent.hasTime&&selectedEvent.startTime?` · ${formatEventTime(selectedEvent)}`:""}</div>
             {selectedEvent.note&&<div style={{ fontSize:13,color:C.text2,padding:12,background:C.surface3,borderRadius:8 }}>{selectedEvent.note}</div>}
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:8 }}>
               {!selectedEvent.syncedToCalendar&&(
@@ -1310,6 +1325,19 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
               <Input label="날짜 *" type="date" value={form.date} onChange={fld("date")}/>
               <SelectInput label="유형" value={form.type} onChange={fld("type")}>{Object.entries(EVENT_TYPES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</SelectInput>
             </div>
+            <label style={{ display:"flex",alignItems:"center",gap:10,cursor:"pointer" }}>
+              <div style={{ position:"relative",width:40,height:22,flexShrink:0 }} onClick={()=>setForm(p=>({...p,hasTime:!p.hasTime}))}>
+                <div style={{ position:"absolute",inset:0,borderRadius:99,background:form.hasTime?C.accent:C.surface3,transition:"background 0.2s" }}/>
+                <div style={{ position:"absolute",top:2,left:form.hasTime?20:2,width:18,height:18,borderRadius:"50%",background:"white",transition:"left 0.2s" }}/>
+              </div>
+              <span style={{ fontSize:13,color:C.text2 }}>시간 설정</span>
+            </label>
+            {form.hasTime&&(
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                <Input label="시작 시간" type="time" value={form.startTime} onChange={fld("startTime")}/>
+                <Input label="종료 시간" type="time" value={form.endTime} onChange={fld("endTime")}/>
+              </div>
+            )}
             <Textarea label="메모" value={form.note} onChange={fld("note")} placeholder="장소, 준비물 등 ..."/>
             <label style={{ display:"flex",alignItems:"center",gap:10,cursor:"pointer" }}>
               <div style={{ position:"relative",width:40,height:22,flexShrink:0 }} onClick={()=>setForm(p=>({...p,isDday:!p.isDday}))}>
@@ -1435,6 +1463,89 @@ function SearchResults({ query, library, certCategories, events, setPage, clearS
   );
 }
 
+// ─── COVER LETTER ──────────────────────────────────────────
+function CoverLetter({ questions, onChange }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [addForm, setAddForm] = useState({ question:"" });
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ question:"" });
+  const drag = useDragList(questions, onChange);
+
+  function addQuestion() {
+    if (!addForm.question.trim()) return;
+    onChange([...questions, { id:uid(), question:addForm.question.trim(), answer:"" }]);
+    setAddForm({ question:"" }); setShowAdd(false);
+  }
+  function updateAnswer(id, answer) {
+    onChange(questions.map(q => q.id !== id ? q : { ...q, answer }));
+  }
+  function deleteQuestion(id) { onChange(questions.filter(q => q.id !== id)); }
+  function saveEdit(id) {
+    if (!editForm.question.trim()) return;
+    onChange(questions.map(q => q.id !== id ? q : { ...q, question:editForm.question.trim() }));
+    setEditingId(null);
+  }
+
+  return (
+    <div>
+      <PageHeader title="자기소개서" sub="나의 경험을 미리 언어화해두세요" action={<Btn icon={Plus} onClick={()=>setShowAdd(true)}>질문 추가</Btn>}/>
+      {questions.length === 0 && <EmptyState icon={ScrollText} title="질문이 없습니다" sub="'질문 추가' 버튼으로 항목을 만들어보세요" action={<Btn icon={Plus} onClick={()=>setShowAdd(true)}>질문 추가</Btn>}/>}
+      <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
+        {questions.map((q, idx) => (
+          <div key={q.id}
+            draggable
+            onDragStart={()=>drag.onDragStart(idx)}
+            onDragOver={e=>drag.onDragOver(e,idx)}
+            onDrop={e=>drag.onDrop(e,idx)}
+            onDragEnd={drag.onDragEnd}
+            style={{ ...S.card,overflow:"hidden",opacity:drag.overIdx===idx?0.6:1,outline:drag.overIdx===idx?`2px dashed ${C.accent}`:"none" }}>
+            <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"14px 20px",borderBottom:`1px solid ${C.border}`,background:C.surface }}>
+              {editingId===q.id?(
+                <input autoFocus value={editForm.question} onChange={e=>setEditForm(p=>({...p,question:e.target.value}))}
+                  onKeyDown={e=>{if(e.key==="Enter")saveEdit(q.id);if(e.key==="Escape")setEditingId(null);}}
+                  style={{ flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.accent}`,color:C.text1,fontSize:13,fontWeight:600,outline:"none",fontFamily:"inherit",lineHeight:1.5 }}/>
+              ):(
+                <span style={{ fontSize:13,fontWeight:600,color:C.text1,flex:1,lineHeight:1.5 }}>{q.question}</span>
+              )}
+              <div style={{ display:"flex",gap:4,flexShrink:0,marginLeft:8 }}>
+                {editingId===q.id?(
+                  <button onClick={()=>saveEdit(q.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.success,display:"flex" }}><Check size={12}/></button>
+                ):(
+                  <button onClick={()=>{setEditingId(q.id);setEditForm({question:q.question});}} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text3,display:"flex" }}><Edit2 size={12}/></button>
+                )}
+                <button onClick={()=>deleteQuestion(q.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
+              </div>
+            </div>
+            <div style={{ padding:16 }}>
+              <textarea
+                value={q.answer||""}
+                onChange={e=>updateAnswer(q.id, e.target.value)}
+                placeholder="답변을 입력하세요..."
+                rows={6}
+                style={{ ...S.input,resize:"vertical",lineHeight:1.7 }}
+              />
+              <div style={{ fontSize:11,color:C.text3,marginTop:6,textAlign:"right" }}>
+                {(q.answer||"").length.toLocaleString()}자 (공백 포함)
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {showAdd&&(
+        <Modal title="질문 추가" onClose={()=>setShowAdd(false)}>
+          <div style={{ ...S.col,gap:16 }}>
+            <Textarea label="질문 *" value={addForm.question} onChange={e=>setAddForm(p=>({...p,question:e.target.value}))} placeholder="조직을 발전시킨 경험, 나의 성격 장단점 등..."/>
+            <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
+              <Btn variant="ghost" onClick={()=>setShowAdd(false)}>취소</Btn>
+              <Btn onClick={addQuestion}>추가</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── SIDEBAR ───────────────────────────────────────────────
 function Sidebar({ page, setPage, certCategories, events, syncStatus, onSignOut, userInfo, searchQuery, setSearchQuery }) {
   const totalCerts=certCategories.reduce((a,c)=>a+(c.certs||[]).length,0);
@@ -1444,6 +1555,7 @@ function Sidebar({ page, setPage, certCategories, events, syncStatus, onSignOut,
     {id:"library",label:"강의 자료실",icon:BookOpen},
     {id:"certs",label:"자격증 보관함",icon:Award,badge:totalCerts},
     {id:"scheduler",label:"학습 스케줄러",icon:Calendar,badge:upcoming||null},
+    {id:"cover",label:"자기소개서",icon:ScrollText},
   ];
   return (
     <nav style={{ width:220,minWidth:220,display:"flex",flexDirection:"column",height:"100%" }}>
@@ -1509,8 +1621,8 @@ export default function App() {
     const u=await uRes.json(); setUserInfo({name:u.name,email:u.email,picture:u.picture});
     const existing=await findFile(DATA_FILE);
     if(existing){ dataFileIdRef.current=existing.id; const loaded=await readJsonFile(existing.id);
-      if(loaded.certs&&!loaded.certCategories){ setData({library:loaded.library||[],certCategories:[{id:uid(),name:"기타",color:SEC_COLORS[0],certs:loaded.certs.map(c=>({...c,files:c.files||[]}))}],events:loaded.events||[]}); }
-      else { setData({library:loaded.library||[],certCategories:loaded.certCategories||[],events:loaded.events||[]}); }
+      if(loaded.certs&&!loaded.certCategories){ setData({library:loaded.library||[],certCategories:[{id:uid(),name:"기타",color:SEC_COLORS[0],certs:loaded.certs.map(c=>({...c,files:c.files||[]}))}],events:loaded.events||[],coverLetterQuestions:loaded.coverLetterQuestions||[]}); }
+      else { setData({library:loaded.library||[],certCategories:loaded.certCategories||[],events:loaded.events||[],coverLetterQuestions:loaded.coverLetterQuestions||[]}); }
     } else { dataFileIdRef.current=await createJsonFile(DATA_FILE,EMPTY_DATA); }
     const folder=await findFile(FOLDER_NAME,"drive");
     driveFolderIdRef.current=folder?folder.id:await getOrCreateDriveFolder();
@@ -1522,6 +1634,7 @@ export default function App() {
   const updateLibrary=useCallback(library=>{const d={...data,library};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
   const updateCerts=useCallback(certCategories=>{const d={...data,certCategories};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
   const updateEvents=useCallback(events=>{const d={...data,events};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const updateCoverLetter=useCallback(coverLetterQuestions=>{const d={...data,coverLetterQuestions};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
   const handleSetCalendarId=useCallback(id=>{setCalendarId(id);localStorage.setItem("career_cal_id",id);},[]);
 
   const globalStyle=`* { box-sizing: border-box; margin: 0; padding: 0; } html, body, #root { height: 100%; } body { background: ${C.bg}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; } ::-webkit-scrollbar { width: 4px; height: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 99px; } input, select, textarea, button { font-family: inherit; } input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.4); } select option { background: ${C.surface2}; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%,100%{opacity:1;}50%{opacity:0.4;} } @keyframes toastIn { from { opacity:0; transform:translateX(12px) scale(0.96); } to { opacity:1; transform:translateX(0) scale(1); } } a { text-decoration: none; }`;
@@ -1537,6 +1650,7 @@ export default function App() {
         library:  <Library library={data.library} onChange={updateLibrary} driveFolderId={driveFolderIdRef.current}/>,
         certs:    <Certificates certCategories={data.certCategories} onChange={updateCerts} driveFolderId={driveFolderIdRef.current}/>,
         scheduler:<Scheduler events={data.events} onChange={updateEvents} calendarId={calendarId} setCalendarId={handleSetCalendarId}/>,
+        cover:    <CoverLetter questions={data.coverLetterQuestions||[]} onChange={updateCoverLetter}/>,
       }[page];
 
   const sidebarProps = { page, setPage, certCategories:data.certCategories, events:data.events, syncStatus, onSignOut:handleSignOut, userInfo, searchQuery, setSearchQuery };
