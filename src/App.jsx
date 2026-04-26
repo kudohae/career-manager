@@ -233,7 +233,7 @@ const EVENT_TYPES = {
   other: { label:"기타",       color:"#8892a4" },
 };
 const WEEKDAYS  = ["일","월","화","수","목","금","토"];
-const EMPTY_DATA = { library:[], certCategories:[], events:[], coverLetterQuestions:[] };
+const EMPTY_DATA = { library:[], certCategories:[], events:[], coverLetterFolders:[] };
 function formatEventTime(e) {
   if (!e.hasTime || !e.startTime) return "";
   return `${e.startTime}${e.endTime?`~${e.endTime}`:""}`;
@@ -1282,7 +1282,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
                     </div>
                   </div>
                   <span style={{ fontSize:11,color:C.text3,flexShrink:0 }}>{formatDate(e.date)}{e.hasTime&&e.startTime?` ${formatEventTime(e)}`:""}</span>
-                  {e.isDday&&<span style={{ fontSize:11,fontWeight:700,flexShrink:0,padding:"2px 8px",borderRadius:99,background:diff<0?"rgba(148,163,184,0.1)":diff===0?C.danger+"20":C.accent+"18",color:diff<0?C.text3:diff===0?C.danger:C.accent }}>{dDayLabel(diff)}</span>}
+                  {e.isDday&&diff>=0&&<span style={{ fontSize:11,fontWeight:700,flexShrink:0,padding:"2px 8px",borderRadius:99,background:diff===0?C.danger+"20":C.accent+"18",color:diff===0?C.danger:C.accent }}>{dDayLabel(diff)}</span>}
                   {e.syncedToCalendar?(
                     <div title="Google 캘린더에 동기화됨" style={{ display:"flex",padding:4,color:C.success,flexShrink:0 }}><CalendarCheck size={13}/></div>
                   ):(
@@ -1301,7 +1301,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
           <div style={{ ...S.col,gap:12 }}>
             <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
               <div style={{ fontSize:11,padding:"3px 10px",borderRadius:99,background:EVENT_TYPES[selectedEvent.type]?.color+"22",color:EVENT_TYPES[selectedEvent.type]?.color }}>{EVENT_TYPES[selectedEvent.type]?.label}</div>
-              {selectedEvent.isDday&&<div style={{ fontSize:11,padding:"3px 10px",borderRadius:99,background:C.accent+"18",color:C.accent }}>D-Day {dDayLabel(diffDays(selectedEvent.date))}</div>}
+              {selectedEvent.isDday&&diffDays(selectedEvent.date)>=0&&<div style={{ fontSize:11,padding:"3px 10px",borderRadius:99,background:diffDays(selectedEvent.date)===0?C.danger+"18":C.accent+"18",color:diffDays(selectedEvent.date)===0?C.danger:C.accent }}>D-Day {dDayLabel(diffDays(selectedEvent.date))}</div>}
               {selectedEvent.syncedToCalendar&&<div style={{ fontSize:11,padding:"3px 10px",borderRadius:99,background:C.success+"18",color:C.success,display:"flex",alignItems:"center",gap:4 }}><CalendarCheck size={10}/>Google 캘린더 연동됨</div>}
             </div>
             <div style={{ fontSize:13,color:C.text2 }}>{formatDate(selectedEvent.date)}{selectedEvent.hasTime&&selectedEvent.startTime?` · ${formatEventTime(selectedEvent)}`:""}</div>
@@ -1453,7 +1453,7 @@ function SearchResults({ query, library, certCategories, events, setPage, clearS
           <div style={{ ...S.card,overflow:"hidden" }}>
             {eventResults.map(e => {
               const diff = diffDays(e.date);
-              const badge = e.isDday ? {text:dDayLabel(diff),bg:(diff===0?C.danger:diff<0?C.text3:C.accent)+"22",color:diff===0?C.danger:diff<0?C.text3:C.accent} : null;
+              const badge = e.isDday&&diff>=0 ? {text:dDayLabel(diff),bg:(diff===0?C.danger:C.accent)+"22",color:diff===0?C.danger:C.accent} : null;
               return <Row key={e.id} icon={Calendar} color={EVENT_TYPES[e.type]?.color||C.accent} primary={highlight(e.title)} secondary={`${formatDate(e.date)} · ${EVENT_TYPES[e.type]?.label}`} badge={badge} onGo={()=>{setPage("scheduler");clearSearch();}}/>;
             })}
           </div>
@@ -1464,84 +1464,115 @@ function SearchResults({ query, library, certCategories, events, setPage, clearS
 }
 
 // ─── COVER LETTER ──────────────────────────────────────────
-function CoverLetter({ questions, onChange }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ question:"" });
-  const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ question:"" });
-  const drag = useDragList(questions, onChange);
+function CoverLetter({ folders, onChange }) {
+  const [showAddFolder, setShowAddFolder] = useState(false);
+  const [newFolderForm, setNewFolderForm] = useState({ name:"", color:SEC_COLORS[0] });
+  const [addQuestionTarget, setAddQuestionTarget] = useState(null);
+  const [addQForm, setAddQForm] = useState({ question:"" });
+  const [collapsedFolders, setCollapsedFolders] = useState({});
+  const [editingQ, setEditingQ] = useState(null); // { folderId, qId }
+  const [editQForm, setEditQForm] = useState({ question:"" });
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const folderDrag = useDragList(folders, onChange);
+  const qDragRefs = useRef({});
+  const [qDragState, setQDragState] = useState({});
 
-  function addQuestion() {
-    if (!addForm.question.trim()) return;
-    onChange([...questions, { id:uid(), question:addForm.question.trim(), answer:"" }]);
-    setAddForm({ question:"" }); setShowAdd(false);
+  function addFolder() {
+    if (!newFolderForm.name.trim()) return;
+    onChange([...folders, { id:uid(), name:newFolderForm.name.trim(), color:newFolderForm.color, questions:[] }]);
+    setNewFolderForm({ name:"", color:SEC_COLORS[0] }); setShowAddFolder(false);
   }
-  function updateAnswer(id, answer) {
-    onChange(questions.map(q => q.id !== id ? q : { ...q, answer }));
+  function deleteFolder(id) { onChange(folders.filter(f => f.id !== id)); setConfirmDelete(null); }
+  function addQuestion(folderId) {
+    if (!addQForm.question.trim()) return;
+    onChange(folders.map(f => f.id !== folderId ? f : { ...f, questions:[...(f.questions||[]),{ id:uid(), question:addQForm.question.trim(), answer:"" }] }));
+    setAddQForm({ question:"" }); setAddQuestionTarget(null);
   }
-  function deleteQuestion(id) { onChange(questions.filter(q => q.id !== id)); }
-  function saveEdit(id) {
-    if (!editForm.question.trim()) return;
-    onChange(questions.map(q => q.id !== id ? q : { ...q, question:editForm.question.trim() }));
-    setEditingId(null);
+  function updateAnswer(folderId, qId, answer) {
+    onChange(folders.map(f => f.id !== folderId ? f : { ...f, questions:(f.questions||[]).map(q => q.id!==qId?q:{...q,answer}) }));
   }
+  function deleteQuestion(folderId, qId) { onChange(folders.map(f => f.id!==folderId?f:{...f,questions:(f.questions||[]).filter(q=>q.id!==qId)})); setConfirmDelete(null); }
+  function saveEditQ(folderId, qId) {
+    if (!editQForm.question.trim()) return;
+    onChange(folders.map(f => f.id!==folderId?f:{...f,questions:(f.questions||[]).map(q=>q.id!==qId?q:{...q,question:editQForm.question.trim()})}));
+    setEditingQ(null);
+  }
+  function onQDragStart(fid,i){qDragRefs.current[fid]={dragIdx:i};}
+  function onQDragOver(e,fid,i){e.preventDefault();setQDragState(p=>({...p,[fid]:i}));}
+  function onQDrop(e,fid,i){e.preventDefault();const ref=qDragRefs.current[fid]||{};if(ref.dragIdx!=null&&ref.dragIdx!==i){onChange(folders.map(f=>f.id!==fid?f:{...f,questions:reorder(f.questions||[],ref.dragIdx,i)}));}qDragRefs.current[fid]={};setQDragState(p=>({...p,[fid]:null}));}
+  function onQDragEnd(fid){qDragRefs.current[fid]={};setQDragState(p=>({...p,[fid]:null}));}
 
   return (
     <div>
-      <PageHeader title="자기소개서" sub="나의 경험을 미리 언어화해두세요" action={<Btn icon={Plus} onClick={()=>setShowAdd(true)}>질문 추가</Btn>}/>
-      {questions.length === 0 && <EmptyState icon={ScrollText} title="질문이 없습니다" sub="'질문 추가' 버튼으로 항목을 만들어보세요" action={<Btn icon={Plus} onClick={()=>setShowAdd(true)}>질문 추가</Btn>}/>}
-      <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        {questions.map((q, idx) => (
-          <div key={q.id}
-            draggable
-            onDragStart={()=>drag.onDragStart(idx)}
-            onDragOver={e=>drag.onDragOver(e,idx)}
-            onDrop={e=>drag.onDrop(e,idx)}
-            onDragEnd={drag.onDragEnd}
-            style={{ ...S.card,overflow:"hidden",opacity:drag.overIdx===idx?0.6:1,outline:drag.overIdx===idx?`2px dashed ${C.accent}`:"none" }}>
-            <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"14px 20px",borderBottom:`1px solid ${C.border}`,background:C.surface }}>
-              {editingId===q.id?(
-                <input autoFocus value={editForm.question} onChange={e=>setEditForm(p=>({...p,question:e.target.value}))}
-                  onKeyDown={e=>{if(e.key==="Enter")saveEdit(q.id);if(e.key==="Escape")setEditingId(null);}}
-                  style={{ flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.accent}`,color:C.text1,fontSize:13,fontWeight:600,outline:"none",fontFamily:"inherit",lineHeight:1.5 }}/>
-              ):(
-                <span style={{ fontSize:13,fontWeight:600,color:C.text1,flex:1,lineHeight:1.5 }}>{q.question}</span>
+      <PageHeader title="자기소개서" sub="나의 경험을 미리 언어화해두세요" action={<Btn icon={Plus} onClick={()=>setShowAddFolder(true)}>폴더 추가</Btn>}/>
+      {folders.length===0&&<EmptyState icon={ScrollText} title="폴더가 없습니다" sub="'폴더 추가' 버튼으로 분류를 만들어보세요" action={<Btn icon={Plus} onClick={()=>setShowAddFolder(true)}>폴더 추가</Btn>}/>}
+      <div style={{ display:"flex",flexDirection:"column",gap:20 }}>
+        {folders.map((folder,folderIdx)=>{
+          const collapsed=collapsedFolders[folder.id];
+          return (
+            <div key={folder.id}
+              draggable
+              onDragStart={()=>folderDrag.onDragStart(folderIdx)}
+              onDragOver={e=>folderDrag.onDragOver(e,folderIdx)}
+              onDrop={e=>folderDrag.onDrop(e,folderIdx)}
+              onDragEnd={folderDrag.onDragEnd}
+              style={{ ...S.card,overflow:"hidden",opacity:folderDrag.overIdx===folderIdx?0.6:1,outline:folderDrag.overIdx===folderIdx?`2px dashed ${C.accent}`:"none" }}>
+              <div style={{ display:"flex",alignItems:"center",gap:10,padding:"14px 20px",borderBottom:`1px solid ${C.border}`,borderLeft:`3px solid ${folder.color}`,background:C.surface }}>
+                <button onClick={()=>setCollapsedFolders(p=>({...p,[folder.id]:!p[folder.id]}))} style={{ background:"transparent",border:"none",cursor:"pointer",padding:2,color:C.text3,display:"flex" }}>{collapsed?<CR size={13}/>:<ChevronDown size={13}/>}</button>
+                <div style={{ width:10,height:10,borderRadius:"50%",background:folder.color,flexShrink:0 }}/>
+                <span style={{ flex:1,fontSize:14,fontWeight:600,color:C.text1 }}>{folder.name}</span>
+                <span style={{ fontSize:11,color:C.text3 }}>{(folder.questions||[]).length}개</span>
+                <Btn size="sm" icon={Plus} variant="ghost" style={{ background:folder.color+"18",color:folder.color,border:"none" }} onClick={()=>{setAddQuestionTarget(folder.id);setAddQForm({question:""});}}>질문</Btn>
+                <button onClick={()=>setConfirmDelete({type:"folder",folderId:folder.id})} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
+              </div>
+              {!collapsed&&(
+                <div style={{ padding:16 }}>
+                  {(folder.questions||[]).length===0?(
+                    <div style={{ fontSize:12,color:C.text3,padding:"8px 4px" }}>질문을 추가하세요.</div>
+                  ):(
+                    <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                      {(folder.questions||[]).map((q,qIdx)=>(
+                        <div key={q.id}
+                          draggable
+                          onDragStart={()=>onQDragStart(folder.id,qIdx)}
+                          onDragOver={e=>onQDragOver(e,folder.id,qIdx)}
+                          onDrop={e=>onQDrop(e,folder.id,qIdx)}
+                          onDragEnd={()=>onQDragEnd(folder.id)}
+                          style={{ borderRadius:10,overflow:"hidden",border:`1px solid ${C.border2}`,background:C.surface2,opacity:qDragState[folder.id]===qIdx?0.5:1,outline:qDragState[folder.id]===qIdx?`2px dashed ${folder.color}`:"none" }}>
+                          <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"10px 14px",borderBottom:`1px solid ${C.border}`,background:C.surface }}>
+                            {editingQ?.folderId===folder.id&&editingQ?.qId===q.id?(
+                              <input autoFocus value={editQForm.question} onChange={e=>setEditQForm(p=>({...p,question:e.target.value}))}
+                                onKeyDown={e=>{if(e.key==="Enter")saveEditQ(folder.id,q.id);if(e.key==="Escape")setEditingQ(null);}}
+                                style={{ flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.accent}`,color:C.text1,fontSize:13,fontWeight:600,outline:"none",fontFamily:"inherit",lineHeight:1.5 }}/>
+                            ):(
+                              <span style={{ fontSize:13,fontWeight:600,color:C.text1,flex:1,lineHeight:1.5 }}>{q.question}</span>
+                            )}
+                            <div style={{ display:"flex",gap:4,flexShrink:0,marginLeft:8 }}>
+                              {editingQ?.folderId===folder.id&&editingQ?.qId===q.id?(
+                                <button onClick={()=>saveEditQ(folder.id,q.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.success,display:"flex" }}><Check size={12}/></button>
+                              ):(
+                                <button onClick={()=>{setEditingQ({folderId:folder.id,qId:q.id});setEditQForm({question:q.question});}} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text3,display:"flex" }}><Edit2 size={12}/></button>
+                              )}
+                              <button onClick={()=>setConfirmDelete({type:"question",folderId:folder.id,qId:q.id})} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
+                            </div>
+                          </div>
+                          <div style={{ padding:12 }}>
+                            <textarea value={q.answer||""} onChange={e=>updateAnswer(folder.id,q.id,e.target.value)} placeholder="답변을 입력하세요..." rows={5} style={{ ...S.input,resize:"vertical",lineHeight:1.7 }}/>
+                            <div style={{ fontSize:11,color:C.text3,marginTop:5,textAlign:"right" }}>{(q.answer||"").length.toLocaleString()}자 (공백 포함)</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
-              <div style={{ display:"flex",gap:4,flexShrink:0,marginLeft:8 }}>
-                {editingId===q.id?(
-                  <button onClick={()=>saveEdit(q.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.success,display:"flex" }}><Check size={12}/></button>
-                ):(
-                  <button onClick={()=>{setEditingId(q.id);setEditForm({question:q.question});}} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.text3,display:"flex" }}><Edit2 size={12}/></button>
-                )}
-                <button onClick={()=>deleteQuestion(q.id)} style={{ background:"transparent",border:"none",cursor:"pointer",padding:4,color:C.danger,display:"flex" }}><Trash2 size={12}/></button>
-              </div>
             </div>
-            <div style={{ padding:16 }}>
-              <textarea
-                value={q.answer||""}
-                onChange={e=>updateAnswer(q.id, e.target.value)}
-                placeholder="답변을 입력하세요..."
-                rows={6}
-                style={{ ...S.input,resize:"vertical",lineHeight:1.7 }}
-              />
-              <div style={{ fontSize:11,color:C.text3,marginTop:6,textAlign:"right" }}>
-                {(q.answer||"").length.toLocaleString()}자 (공백 포함)
-              </div>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      {showAdd&&(
-        <Modal title="질문 추가" onClose={()=>setShowAdd(false)}>
-          <div style={{ ...S.col,gap:16 }}>
-            <Textarea label="질문 *" value={addForm.question} onChange={e=>setAddForm(p=>({...p,question:e.target.value}))} placeholder="조직을 발전시킨 경험, 나의 성격 장단점 등..."/>
-            <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
-              <Btn variant="ghost" onClick={()=>setShowAdd(false)}>취소</Btn>
-              <Btn onClick={addQuestion}>추가</Btn>
-            </div>
-          </div>
-        </Modal>
-      )}
+      {showAddFolder&&(<Modal title="폴더 추가" onClose={()=>setShowAddFolder(false)}><div style={{ ...S.col,gap:16 }}><Input label="폴더 이름" value={newFolderForm.name} onChange={e=>setNewFolderForm(p=>({...p,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addFolder()} placeholder="성격/가치관, 직무 역량 등..."/><Field label="색상"><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{SEC_COLORS.map(c=>(<button key={c} onClick={()=>setNewFolderForm(p=>({...p,color:c}))} style={{ width:28,height:28,borderRadius:"50%",background:c,border:newFolderForm.color===c?"3px solid white":"3px solid transparent",cursor:"pointer",outline:"none",opacity:newFolderForm.color===c?1:0.5 }}/>))}</div></Field><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setShowAddFolder(false)}>취소</Btn><Btn onClick={addFolder}>추가</Btn></div></div></Modal>)}
+      {addQuestionTarget&&(<Modal title="질문 추가" onClose={()=>setAddQuestionTarget(null)}><div style={{ ...S.col,gap:16 }}><Textarea label="질문 *" value={addQForm.question} onChange={e=>setAddQForm(p=>({...p,question:e.target.value}))} placeholder="조직을 발전시킨 경험, 나의 성격 장단점 등..."/><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setAddQuestionTarget(null)}>취소</Btn><Btn onClick={()=>addQuestion(addQuestionTarget)}>추가</Btn></div></div></Modal>)}
+      {confirmDelete&&(<Modal title="삭제 확인" onClose={()=>setConfirmDelete(null)}><p style={{ fontSize:13,color:C.text2,marginBottom:20 }}>{confirmDelete.type==="folder"?"이 폴더와 포함된 모든 질문을 삭제하시겠습니까?":"이 질문을 삭제하시겠습니까?"}</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="ghost" onClick={()=>setConfirmDelete(null)}>취소</Btn><Btn variant="danger" onClick={()=>{if(confirmDelete.type==="folder")deleteFolder(confirmDelete.folderId);else deleteQuestion(confirmDelete.folderId,confirmDelete.qId);}}>삭제</Btn></div></Modal>)}
     </div>
   );
 }
@@ -1621,8 +1652,9 @@ export default function App() {
     const u=await uRes.json(); setUserInfo({name:u.name,email:u.email,picture:u.picture});
     const existing=await findFile(DATA_FILE);
     if(existing){ dataFileIdRef.current=existing.id; const loaded=await readJsonFile(existing.id);
-      if(loaded.certs&&!loaded.certCategories){ setData({library:loaded.library||[],certCategories:[{id:uid(),name:"기타",color:SEC_COLORS[0],certs:loaded.certs.map(c=>({...c,files:c.files||[]}))}],events:loaded.events||[],coverLetterQuestions:loaded.coverLetterQuestions||[]}); }
-      else { setData({library:loaded.library||[],certCategories:loaded.certCategories||[],events:loaded.events||[],coverLetterQuestions:loaded.coverLetterQuestions||[]}); }
+      const migrateCL = d => d.coverLetterFolders || (d.coverLetterQuestions?.length ? [{id:uid(),name:"기본",color:SEC_COLORS[0],questions:d.coverLetterQuestions}] : []);
+      if(loaded.certs&&!loaded.certCategories){ setData({library:loaded.library||[],certCategories:[{id:uid(),name:"기타",color:SEC_COLORS[0],certs:loaded.certs.map(c=>({...c,files:c.files||[]}))}],events:loaded.events||[],coverLetterFolders:migrateCL(loaded)}); }
+      else { setData({library:loaded.library||[],certCategories:loaded.certCategories||[],events:loaded.events||[],coverLetterFolders:migrateCL(loaded)}); }
     } else { dataFileIdRef.current=await createJsonFile(DATA_FILE,EMPTY_DATA); }
     const folder=await findFile(FOLDER_NAME,"drive");
     driveFolderIdRef.current=folder?folder.id:await getOrCreateDriveFolder();
@@ -1634,7 +1666,7 @@ export default function App() {
   const updateLibrary=useCallback(library=>{const d={...data,library};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
   const updateCerts=useCallback(certCategories=>{const d={...data,certCategories};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
   const updateEvents=useCallback(events=>{const d={...data,events};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
-  const updateCoverLetter=useCallback(coverLetterQuestions=>{const d={...data,coverLetterQuestions};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const updateCoverLetter=useCallback(coverLetterFolders=>{const d={...data,coverLetterFolders};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
   const handleSetCalendarId=useCallback(id=>{setCalendarId(id);localStorage.setItem("career_cal_id",id);},[]);
 
   const globalStyle=`* { box-sizing: border-box; margin: 0; padding: 0; } html, body, #root { height: 100%; } body { background: ${C.bg}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; } ::-webkit-scrollbar { width: 4px; height: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 99px; } input, select, textarea, button { font-family: inherit; } input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.4); } select option { background: ${C.surface2}; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%,100%{opacity:1;}50%{opacity:0.4;} } @keyframes toastIn { from { opacity:0; transform:translateX(12px) scale(0.96); } to { opacity:1; transform:translateX(0) scale(1); } } a { text-decoration: none; }`;
@@ -1650,7 +1682,7 @@ export default function App() {
         library:  <Library library={data.library} onChange={updateLibrary} driveFolderId={driveFolderIdRef.current}/>,
         certs:    <Certificates certCategories={data.certCategories} onChange={updateCerts} driveFolderId={driveFolderIdRef.current}/>,
         scheduler:<Scheduler events={data.events} onChange={updateEvents} calendarId={calendarId} setCalendarId={handleSetCalendarId}/>,
-        cover:    <CoverLetter questions={data.coverLetterQuestions||[]} onChange={updateCoverLetter}/>,
+        cover:    <CoverLetter folders={data.coverLetterFolders||[]} onChange={updateCoverLetter}/>,
       }[page];
 
   const sidebarProps = { page, setPage, certCategories:data.certCategories, events:data.events, syncStatus, onSignOut:handleSignOut, userInfo, searchQuery, setSearchQuery };
