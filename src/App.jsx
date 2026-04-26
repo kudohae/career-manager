@@ -1266,10 +1266,11 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
       )}
 
       <div>
-        <h3 style={{ fontSize:13,fontWeight:600,color:C.text1,marginBottom:12 }}>전체 일정 <span style={{ color:C.text3 }}>({events.length})</span></h3>
-        {events.length===0?<p style={{ fontSize:13,color:C.text2 }}>일정이 없습니다.</p>:(
+        {(()=>{const upcoming=[...events].filter(e=>diffDays(e.date)>=0).sort((a,b)=>new Date(a.date)-new Date(b.date));return(
+        <><h3 style={{ fontSize:13,fontWeight:600,color:C.text1,marginBottom:12 }}>전체 일정 <span style={{ color:C.text3 }}>({upcoming.length})</span></h3>
+        {upcoming.length===0?<p style={{ fontSize:13,color:C.text2 }}>예정된 일정이 없습니다.</p>:(
           <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-            {[...events].sort((a,b)=>new Date(a.date)-new Date(b.date)).map(e=>{
+            {upcoming.map(e=>{
               const diff=diffDays(e.date);
               return (
                 <div key={e.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"12px 16px",...S.card }}>
@@ -1294,6 +1295,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
             })}
           </div>
         )}
+        </>);})()}
       </div>
 
       {selectedEvent&&(
