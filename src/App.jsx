@@ -126,7 +126,7 @@ async function addToGoogleCalendar(event, calId) {
   const times = buildCalendarTimes(event);
   const res = await window.gapi.client.calendar.events.insert({
     calendarId: calId,
-    resource: { summary: event.title, description: event.note || "", ...times, colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" },
+    resource: { summary: event.title, description: event.note || "", ...times, ...(event.type !== "other" && { colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" }) },
   });
   return res.result.id;
 }
@@ -138,7 +138,7 @@ async function updateGoogleCalendarEvent(googleEventId, calId, event) {
   const times = buildCalendarTimes(event);
   await window.gapi.client.calendar.events.patch({
     calendarId: calId, eventId: googleEventId,
-    resource: { summary: event.title, description: event.note || "", ...times, colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" },
+    resource: { summary: event.title, description: event.note || "", ...times, ...(event.type !== "other" && { colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" }) },
   });
 }
 async function fetchGoogleCalendarEvents(calId, existingEvents) {
@@ -166,12 +166,11 @@ async function fetchGoogleCalendarEvents(calId, existingEvents) {
       const geDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
       const geTitle = ge.summary || "(제목 없음)";
       const geNote = ge.description || "";
-      const geType = colorToType[ge.colorId] || localEv.type;
       const geHasTime = !!ge.start?.dateTime;
       const geStartTime = geHasTime ? ge.start.dateTime.split("T")[1]?.slice(0,5) : null;
       const geEndTime = geHasTime ? ge.end?.dateTime?.split("T")[1]?.slice(0,5) : null;
-      if (geDate !== localEv.date || geTitle !== localEv.title || geNote !== localEv.note || geType !== localEv.type || geHasTime !== (localEv.hasTime||false) || geStartTime !== (localEv.startTime||null) || geEndTime !== (localEv.endTime||null)) {
-        updatedEvents.push({ id: localEv.id, title: geTitle, date: geDate, type: geType, note: geNote, hasTime: geHasTime, startTime: geStartTime, endTime: geEndTime });
+      if (geDate !== localEv.date || geTitle !== localEv.title || geNote !== localEv.note || geHasTime !== (localEv.hasTime||false) || geStartTime !== (localEv.startTime||null) || geEndTime !== (localEv.endTime||null)) {
+        updatedEvents.push({ id: localEv.id, title: geTitle, date: geDate, type: localEv.type, note: geNote, hasTime: geHasTime, startTime: geStartTime, endTime: geEndTime });
       }
     }
   }
