@@ -112,6 +112,20 @@ async function getOrCreateCareerCalendar() {
   localStorage.setItem("career_cal_id", created.result.id);
   return created.result.id;
 }
+const typeToLabel = { exam:"시험", study:"학습", cert:"자격증", other:"기타" };
+const labelToType = { "시험":"exam", "학습":"study", "자격증":"cert", "기타":"other" };
+const typeColorId  = { exam:"11", study:"9", cert:"10", other:"8" };
+function buildGCalDescription(event) {
+  const label = typeToLabel[event.type] || "기타";
+  return event.note ? `${label}\n${event.note}` : label;
+}
+function parseGCalDescription(desc) {
+  if (!desc) return { type:"other", note:"" };
+  const lines = desc.split("\n");
+  const type = labelToType[lines[0].trim()] || "other";
+  const note = lines.slice(1).join("\n").trim();
+  return { type, note };
+}
 function buildCalendarTimes(event) {
   const date = event.date;
   const [y, m, d] = date.split("-").map(Number);
@@ -126,7 +140,7 @@ async function addToGoogleCalendar(event, calId) {
   const times = buildCalendarTimes(event);
   const res = await window.gapi.client.calendar.events.insert({
     calendarId: calId,
-    resource: { summary: event.title, description: event.note || "", ...times, ...(event.type !== "other" && { colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" }) },
+    resource: { summary: event.title, description: buildGCalDescription(event), ...times, colorId: typeColorId[event.type] || "8" },
   });
   return res.result.id;
 }
@@ -138,7 +152,7 @@ async function updateGoogleCalendarEvent(googleEventId, calId, event) {
   const times = buildCalendarTimes(event);
   await window.gapi.client.calendar.events.patch({
     calendarId: calId, eventId: googleEventId,
-    resource: { summary: event.title, description: event.note || "", ...times, ...(event.type !== "other" && { colorId: event.type === "exam" ? "11" : event.type === "cert" ? "10" : "9" }) },
+    resource: { summary: event.title, description: buildGCalDescription(event), ...times, colorId: typeColorId[event.type] || "8" },
   });
 }
 async function fetchGoogleCalendarEvents(calId, existingEvents) {
@@ -147,35 +161,31 @@ async function fetchGoogleCalendarEvents(calId, existingEvents) {
   const timeMax = new Date(now.getFullYear(), now.getMonth() + 12, 31).toISOString();
   const res = await window.gapi.client.calendar.events.list({ calendarId: calId, timeMin, timeMax, singleEvents: true, orderBy: "startTime", maxResults: 500 });
   const googleEvents = res.result.items || [];
-  const colorToType = { "11": "exam", "10": "cert", "9": "study" };
   const geById = new Map(googleEvents.map(ge => [ge.id, ge]));
   const knownGoogleIds = new Set(existingEvents.map(e => e.googleEventId).filter(Boolean));
   const tMin = new Date(timeMin), tMax = new Date(timeMax);
-
   const newEvents = [], updatedEvents = [], deletedLocalIds = [];
 
-  // Check existing synced events for deletions and updates
   for (const localEv of existingEvents) {
     if (!localEv.googleEventId || !localEv.syncedToCalendar) continue;
     const evDate = new Date(localEv.date + "T12:00:00");
-    if (evDate < tMin || evDate > tMax) continue; // outside fetch range, skip
+    if (evDate < tMin || evDate > tMax) continue;
     const ge = geById.get(localEv.googleEventId);
     if (!ge) {
-      deletedLocalIds.push(localEv.id); // deleted in Google Calendar
+      deletedLocalIds.push(localEv.id);
     } else {
       const geDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
       const geTitle = ge.summary || "(제목 없음)";
-      const geNote = ge.description || "";
+      const { type: geType, note: geNote } = parseGCalDescription(ge.description);
       const geHasTime = !!ge.start?.dateTime;
       const geStartTime = geHasTime ? ge.start.dateTime.split("T")[1]?.slice(0,5) : null;
       const geEndTime = geHasTime ? ge.end?.dateTime?.split("T")[1]?.slice(0,5) : null;
-      if (geDate !== localEv.date || geTitle !== localEv.title || geNote !== localEv.note || geHasTime !== (localEv.hasTime||false) || geStartTime !== (localEv.startTime||null) || geEndTime !== (localEv.endTime||null)) {
-        updatedEvents.push({ id: localEv.id, title: geTitle, date: geDate, type: localEv.type, note: geNote, hasTime: geHasTime, startTime: geStartTime, endTime: geEndTime });
+      if (geDate !== localEv.date || geTitle !== localEv.title || geNote !== (localEv.note||"") || geType !== localEv.type || geHasTime !== (localEv.hasTime||false) || geStartTime !== (localEv.startTime||null) || geEndTime !== (localEv.endTime||null)) {
+        updatedEvents.push({ id: localEv.id, title: geTitle, date: geDate, type: geType, note: geNote, hasTime: geHasTime, startTime: geStartTime, endTime: geEndTime });
       }
     }
   }
 
-  // Find new Google Calendar events not yet in CareerKit
   for (const ge of googleEvents) {
     if (knownGoogleIds.has(ge.id)) continue;
     const rawDate = ge.start?.date || ge.start?.dateTime?.split("T")[0];
@@ -183,7 +193,8 @@ async function fetchGoogleCalendarEvents(calId, existingEvents) {
     const newHasTime = !!ge.start?.dateTime;
     const newStartTime = newHasTime ? ge.start.dateTime.split("T")[1]?.slice(0,5) : null;
     const newEndTime = newHasTime ? ge.end?.dateTime?.split("T")[1]?.slice(0,5) : null;
-    newEvents.push({ id: uid(), title: ge.summary || "(제목 없음)", date: rawDate, type: colorToType[ge.colorId] || "other", note: ge.description || "", isDday: true, syncCal: true, googleEventId: ge.id, syncedToCalendar: true, importedFromCalendar: true, hasTime: newHasTime, startTime: newStartTime, endTime: newEndTime });
+    const { type: newType, note: newNote } = parseGCalDescription(ge.description);
+    newEvents.push({ id: uid(), title: ge.summary || "(제목 없음)", date: rawDate, type: newType, note: newNote, isDday: true, syncCal: true, googleEventId: ge.id, syncedToCalendar: true, importedFromCalendar: true, hasTime: newHasTime, startTime: newStartTime, endTime: newEndTime });
   }
 
   return { newEvents, updatedEvents, deletedLocalIds };
@@ -1100,34 +1111,37 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   const [removingCal, setRemovingCal] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
   const [confirmEvent, setConfirmEvent] = useState(null);
   const [editingEventId, setEditingEventId] = useState(null);
   const fld = k=>e=>setForm(p=>({...p,[k]:e.target.value}));
+  const importingRef = useRef(false);
 
-  useEffect(() => { handleImportFromGoogle({ silent: true }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function handleImportFromGoogle({ silent = false } = {}) {
-    setImporting(true); setImportResult(null);
+  async function syncFromGoogle() {
+    if (importingRef.current) return;
+    importingRef.current = true; setImporting(true);
     try {
       let calId = calendarId;
       if (!calId) { calId = await getOrCreateCareerCalendar(); setCalendarId(calId); }
       const { newEvents, updatedEvents, deletedLocalIds } = await fetchGoogleCalendarEvents(calId, events);
-      const hasChanges = newEvents.length > 0 || updatedEvents.length > 0 || deletedLocalIds.length > 0;
-      if (hasChanges) {
+      if (newEvents.length || updatedEvents.length || deletedLocalIds.length) {
         let next = events.filter(e => !deletedLocalIds.includes(e.id));
         next = next.map(e => { const u = updatedEvents.find(x => x.id === e.id); return u ? { ...e, ...u } : e; });
         next = [...next, ...newEvents];
         onChange(next);
-        setImportResult({ added: newEvents.length, updated: updatedEvents.length, deleted: deletedLocalIds.length });
-        setTimeout(() => setImportResult(null), 4000);
-      } else if (!silent) {
-        setImportResult({ added: 0, updated: 0, deleted: 0 });
-        setTimeout(() => setImportResult(null), 3000);
+        const parts = [newEvents.length>0&&`추가 ${newEvents.length}건`, updatedEvents.length>0&&`수정 ${updatedEvents.length}건`, deletedLocalIds.length>0&&`삭제 ${deletedLocalIds.length}건`].filter(Boolean);
+        addToast("info", `Google 캘린더 동기화 (${parts.join(", ")})`);
       }
-    } catch(e) { console.error(e); if (!silent) addToast("error","Google 캘린더 가져오기에 실패했습니다."); }
-    finally { setImporting(false); }
+    } catch(e) { console.error(e); }
+    finally { importingRef.current = false; setImporting(false); }
   }
+
+  useEffect(() => {
+    syncFromGoogle();
+    const interval = setInterval(syncFromGoogle, 60000);
+    function onFocus() { syncFromGoogle(); }
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(interval); window.removeEventListener("focus", onFocus); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function openAdd(date=today()){ setEditingEventId(null); setForm({ title:"",date,type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" }); setShowAdd(true); }
   function openEdit(ev){ setEditingEventId(ev.id); setForm({ title:ev.title,date:ev.date,type:ev.type,note:ev.note||"",isDday:ev.isDday,syncCal:false,hasTime:ev.hasTime||false,startTime:ev.startTime||"09:00",endTime:ev.endTime||"10:00" }); setShowAdd(true); }
@@ -1192,26 +1206,18 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   return (
     <div>
       <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:32 }}>
-        <div><h2 style={{ fontSize:20,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>학습 스케줄러</h2><p style={{ fontSize:13,color:C.text2,marginTop:4 }}>시험 일정 및 D-Day 관리 · Google 캘린더 연동</p></div>
+        <div>
+          <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+            <h2 style={{ fontSize:20,fontWeight:700,color:C.text1,fontFamily:"Georgia,serif" }}>학습 스케줄러</h2>
+            {importing&&<RefreshCw size={13} color={C.text3} style={{ animation:"spin 1s linear infinite",flexShrink:0 }}/>}
+          </div>
+          <p style={{ fontSize:13,color:C.text2,marginTop:4 }}>시험 일정 및 D-Day 관리 · Google 캘린더 자동 동기화</p>
+        </div>
         <div style={{ display:"flex",gap:8 }}>
           <div style={{ display:"flex",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border2}` }}>{["month","week"].map(v=>(<button key={v} onClick={()=>setView(v)} style={{ padding:"7px 14px",fontSize:12,fontWeight:500,background:v===view?C.accent:"transparent",color:v===view?"white":C.text2,border:"none",cursor:"pointer",fontFamily:"inherit" }}>{v==="month"?"월간":"주간"}</button>))}</div>
-          <Btn icon={importing?RefreshCw:CalendarCheck} variant="ghost" loading={importing} onClick={()=>handleImportFromGoogle({silent:false})}>Google 가져오기</Btn>
           <Btn icon={Plus} onClick={()=>openAdd()}>일정 추가</Btn>
         </div>
       </div>
-
-      {importResult !== null && (()=>{
-        const total = importResult.added + importResult.updated + importResult.deleted;
-        const parts = [importResult.added>0&&`추가 ${importResult.added}건`, importResult.updated>0&&`수정 ${importResult.updated}건`, importResult.deleted>0&&`삭제 ${importResult.deleted}건`].filter(Boolean);
-        return (
-          <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderRadius:12,marginBottom:16,background:total>0?`${C.success}18`:C.surface3,border:`1px solid ${total>0?C.success+"40":C.border2}` }}>
-            <CalendarCheck size={14} color={total>0?C.success:C.text3}/>
-            <span style={{ fontSize:13,color:total>0?C.success:C.text2 }}>
-              {total>0 ? `Google 캘린더 동기화 완료 (${parts.join(", ")})` : "동기화할 변경사항이 없습니다."}
-            </span>
-          </div>
-        );
-      })()}
 
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
         <button onClick={()=>view==="month"?setCursor(p=>new Date(p.getFullYear(),p.getMonth()-1,1)):setCursor(p=>{const d=new Date(p);d.setDate(d.getDate()-7);return d;})} style={{ background:"transparent",border:"none",cursor:"pointer",padding:6,color:C.text2,display:"flex",borderRadius:8 }}><ChevronLeft size={15}/></button>
