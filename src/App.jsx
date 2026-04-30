@@ -1106,7 +1106,7 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
   const [view, setView] = useState("month");
   const [cursor, setCursor] = useState(new Date());
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
+  const [form, setForm] = useState({ title:"",date:today(),type:"exam",note:"",isDday:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
   const [addingCal, setAddingCal] = useState(false);
   const [removingCal, setRemovingCal] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -1143,8 +1143,8 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
     return () => { clearInterval(interval); window.removeEventListener("focus", onFocus); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function openAdd(date=today()){ setEditingEventId(null); setForm({ title:"",date,type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" }); setShowAdd(true); }
-  function openEdit(ev){ setEditingEventId(ev.id); setForm({ title:ev.title,date:ev.date,type:ev.type,note:ev.note||"",isDday:ev.isDday,syncCal:false,hasTime:ev.hasTime||false,startTime:ev.startTime||"09:00",endTime:ev.endTime||"10:00" }); setShowAdd(true); }
+  function openAdd(date=today()){ setEditingEventId(null); setForm({ title:"",date,type:"exam",note:"",isDday:true,hasTime:false,startTime:"09:00",endTime:"10:00" }); setShowAdd(true); }
+  function openEdit(ev){ setEditingEventId(ev.id); setForm({ title:ev.title,date:ev.date,type:ev.type,note:ev.note||"",isDday:ev.isDday,hasTime:ev.hasTime||false,startTime:ev.startTime||"09:00",endTime:ev.endTime||"10:00" }); setShowAdd(true); }
 
   async function addEvent() {
     if (!form.title.trim()||!form.date) return;
@@ -1157,20 +1157,18 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
         finally { setAddingCal(false); }
       }
       onChange(events.map(e=>e.id!==editingEventId?e:{...e,title:form.title,date:form.date,type:form.type,note:form.note,isDday:form.isDday,hasTime:form.hasTime,startTime:form.hasTime?form.startTime:null,endTime:form.hasTime?form.endTime:null}));
-      setEditingEventId(null); setShowAdd(false); setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
+      setEditingEventId(null); setShowAdd(false); setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
       addToast("success","일정이 수정되었습니다.");
       return;
     }
     setAddingCal(true);
     let googleEventId = null, calId = calendarId;
     try {
-      if (form.syncCal) {
-        if (!calId) { calId = await getOrCreateCareerCalendar(); setCalendarId(calId); }
-        googleEventId = await addToGoogleCalendar({ ...form }, calId);
-      }
+      if (!calId) { calId = await getOrCreateCareerCalendar(); setCalendarId(calId); }
+      googleEventId = await addToGoogleCalendar({ ...form }, calId);
     } catch(e) { console.error(e); } finally { setAddingCal(false); }
     onChange([...events,{ ...form, id:uid(), isDday:form.isDday, googleEventId, syncedToCalendar: !!googleEventId, hasTime:form.hasTime, startTime:form.hasTime?form.startTime:null, endTime:form.hasTime?form.endTime:null }]);
-    setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,syncCal:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
+    setForm({ title:"",date:today(),type:"exam",note:"",isDday:true,hasTime:false,startTime:"09:00",endTime:"10:00" });
     setShowAdd(false);
   }
 
@@ -1353,19 +1351,9 @@ function Scheduler({ events, onChange, calendarId, setCalendarId }) {
               </div>
               <span style={{ fontSize:13,color:C.text2 }}>D-Day 카운트다운 표시</span>
             </label>
-            <label style={{ display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:10,borderRadius:10,background:C.surface3 }}>
-              <div style={{ position:"relative",width:40,height:22,flexShrink:0 }} onClick={()=>setForm(p=>({...p,syncCal:!p.syncCal}))}>
-                <div style={{ position:"absolute",inset:0,borderRadius:99,background:form.syncCal?"#34d399":C.surface2,transition:"background 0.2s" }}/>
-                <div style={{ position:"absolute",top:2,left:form.syncCal?20:2,width:18,height:18,borderRadius:"50%",background:"white",transition:"left 0.2s" }}/>
-              </div>
-              <div>
-                <div style={{ fontSize:13,color:C.text1,display:"flex",alignItems:"center",gap:6 }}><CalendarPlus size={13} color="#34d399"/>Google 캘린더에 추가</div>
-                <div style={{ fontSize:11,color:C.text3,marginTop:2 }}>캐릿 캘린더에 자동 등록</div>
-              </div>
-            </label>
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:4 }}>
               <Btn variant="ghost" onClick={()=>{setShowAdd(false);setEditingEventId(null);}}>취소</Btn>
-              <Btn onClick={addEvent} loading={addingCal}>{editingEventId?"저장":addingCal?"Google 캘린더 동기화 중...":"추가"}</Btn>
+              <Btn onClick={addEvent} loading={addingCal}>{editingEventId?"저장":"추가"}</Btn>
             </div>
           </div>
         </Modal>
