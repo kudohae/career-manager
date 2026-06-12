@@ -335,6 +335,7 @@ function FileViewer({ file, onClose, onRename }) {
   const [state, setState] = useState("loading");
   const [blobUrl, setBlobUrl] = useState(null);
   const [textContent, setTextContent] = useState("");
+  const [mdHtml, setMdHtml] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(file.name);
   const [renaming, setRenaming] = useState(false);
@@ -355,8 +356,11 @@ function FileViewer({ file, onClose, onRename }) {
         const blob = await fetchFileBlob(file.driveId);
         if (isMarkdown(file.name)) {
           const text = await blob.text(); setTextContent(text);
-          try { await loadScript("https://cdn.jsdelivr.net/npm/marked@9/marked.min.js", () => !!window.marked); setState("markdown"); }
-          catch { setState("text"); }
+          try {
+            await loadScript("https://cdn.jsdelivr.net/npm/marked@4/marked.min.js", () => !!window.marked);
+            setMdHtml(window.marked.parse(text));
+            setState("markdown");
+          } catch { setState("text"); }
           return;
         }
         if (isText(file.name)) { setTextContent(await blob.text()); setState("text"); return; }
@@ -446,7 +450,7 @@ function FileViewer({ file, onClose, onRename }) {
         {state==="image"&&<div style={{ display:"flex",alignItems:"center",justifyContent:"center",minHeight:300 }}><img src={blobUrl} alt={file.name} style={{ maxWidth:"100%",maxHeight:"80vh",borderRadius:12,boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}/></div>}
         {state==="pdf-fallback"&&<div style={{ textAlign:"center",padding:40 }}><FileText size={40} color={C.text3} style={{ marginBottom:16 }}/><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>PDF 렌더러를 불러올 수 없습니다.</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>다운로드</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive에서 열기</a>}</div></div>}
         {state==="text"&&<div style={{ maxWidth:800,margin:"0 auto",background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border2}` }}><pre style={{ fontSize:12,color:C.text2,lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word" }}>{textContent}</pre></div>}
-        {state==="markdown"&&<div style={{ maxWidth:800,margin:"0 auto",background:C.surface,borderRadius:12,padding:"24px 32px",border:`1px solid ${C.border2}` }}><div className="md-body" dangerouslySetInnerHTML={{ __html: window.marked?.parse(textContent)||textContent }}/></div>}
+        {state==="markdown"&&<div style={{ maxWidth:800,margin:"0 auto",background:C.surface,borderRadius:12,padding:"24px 32px",border:`1px solid ${C.border2}` }}><div className="md-body" dangerouslySetInnerHTML={{ __html: mdHtml }}/></div>}
         {state==="html"&&<iframe srcDoc={textContent} sandbox="allow-scripts allow-same-origin" title={file.name} style={{ width:"100%",minHeight:"80vh",border:"none",borderRadius:8,background:"white",display:"block",pointerEvents:"none" }} onLoad={e=>{try{const h=e.target.contentDocument?.documentElement?.scrollHeight;if(h)e.target.style.height=h+"px";}catch{}}}/>}
         {state==="other"&&<div style={{ textAlign:"center",padding:40 }}><div style={{ borderRadius:20,padding:24,background:C.surface2,display:"inline-flex",marginBottom:16 }}><File size={40} color={C.text3}/></div><p style={{ fontSize:13,color:C.text2,marginBottom:16 }}>이 형식은 뷰어에서 직접 보기가 불가능합니다.</p><div style={{ display:"flex",gap:8,justifyContent:"center" }}>{blobUrl&&<a href={blobUrl} download={file.name} style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:"white",padding:"8px 16px",borderRadius:10,background:C.accent,textDecoration:"none" }}><Download size={13}/>다운로드</a>}{file.webViewLink&&<a href={file.webViewLink} target="_blank" rel="noreferrer" style={{ display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.text2,padding:"8px 16px",borderRadius:10,border:`1px solid ${C.border2}`,textDecoration:"none" }}><ExternalLink size={13}/>Drive에서 열기</a>}</div></div>}
         {/* PDF: per-slide rows */}
