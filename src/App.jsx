@@ -20,6 +20,7 @@ const DATA_FILE   = "career_data.json";
 const FOLDER_NAME = "CareerKit Files";
 const TOKEN_KEY   = "career_gapi_token";
 const TOKEN_EXP   = "career_gapi_expiry";
+const TOKEN_SEEN  = "career_gapi_seen";
 
 function loadScript(src, check) {
   return new Promise(r => {
@@ -44,6 +45,7 @@ async function initGis() {
 function saveToken(t) {
   localStorage.setItem(TOKEN_KEY, t.access_token);
   localStorage.setItem(TOKEN_EXP, String(Date.now() + (t.expires_in - 60) * 1000));
+  localStorage.setItem(TOKEN_SEEN, "1");
   window.gapi.client.setToken(t);
 }
 function loadCachedToken() {
@@ -51,8 +53,11 @@ function loadCachedToken() {
   if (t && e && Date.now() < e) { window.gapi.client.setToken({ access_token: t }); return true; }
   return false;
 }
+function hasPreviousLogin() {
+  return localStorage.getItem(TOKEN_SEEN) === "1" || !!localStorage.getItem(TOKEN_KEY);
+}
 function clearToken() {
-  localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP);
+  localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP); localStorage.removeItem(TOKEN_SEEN);
   window.gapi.client.setToken(null);
 }
 function getAccessToken() { return window.gapi.client.getToken()?.access_token; }
@@ -1644,16 +1649,22 @@ export default function App() {
 
   const dataFileIdRef=useRef(null), driveFolderIdRef=useRef(null), tokenClientRef=useRef(null), saveTimerRef=useRef(null);
 
-  useEffect(()=>{
-    (async()=>{
-      await Promise.all([initGapi(),initGis()]);
-      tokenClientRef.current=window.google.accounts.oauth2.initTokenClient({ client_id:CLIENT_ID, scope:SCOPES, callback:handleTokenResponse });
-      if (loadCachedToken()) { try { await bootstrapApp(); setAuthState("app"); } catch { clearToken(); setAuthState("login"); } }
-      else setAuthState("login");
-    })();
-  },[]); // eslint-disable-line react-hooks/exhaustive-deps
-
   async function handleTokenResponse(resp){ if(resp.error){setLoginLoading(false);return;} saveToken(resp); await bootstrapApp(); setAuthState("app"); setLoginLoading(false); }
+  function requestAccessToken(prompt = "", timeout = 6000) {
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = resp => { if (!settled) { settled = true; resolve(resp); } };
+      const timer = setTimeout(() => finish({ error: "timeout" }), timeout);
+      tokenClientRef.current.callback = resp => { clearTimeout(timer); finish(resp); };
+      tokenClientRef.current.requestAccessToken({ prompt });
+    });
+  }
+  async function restorePreviousLogin() {
+    const resp = await requestAccessToken("", 6000);
+    if (resp?.error || !resp?.access_token) return false;
+    try { saveToken(resp); await bootstrapApp(); setAuthState("app"); return true; }
+    catch { return false; }
+  }
   async function bootstrapApp(){
     const uRes=await fetch("https://www.googleapis.com/oauth2/v3/userinfo",{headers:{Authorization:`Bearer ${getAccessToken()}`}});
     const u=await uRes.json(); setUserInfo({name:u.name,email:u.email,picture:u.picture});
@@ -1666,8 +1677,28 @@ export default function App() {
     const folder=await findFile(FOLDER_NAME,"drive");
     driveFolderIdRef.current=folder?folder.id:await getOrCreateDriveFolder();
   }
-  function handleSignIn(){ setLoginLoading(true); tokenClientRef.current?.requestAccessToken({prompt:""}); }
+  async function handleSignIn(){
+    setLoginLoading(true);
+    const resp = await requestAccessToken("");
+    await handleTokenResponse(resp);
+  }
   function handleSignOut(){ const t=window.gapi.client.getToken(); if(t)window.google.accounts.oauth2.revoke(t.access_token); clearToken(); setData(EMPTY_DATA); setUserInfo(null); dataFileIdRef.current=null; driveFolderIdRef.current=null; setAuthState("login"); }
+
+  useEffect(()=>{
+    (async()=>{
+      await Promise.all([initGapi(),initGis()]);
+      tokenClientRef.current=window.google.accounts.oauth2.initTokenClient({ client_id:CLIENT_ID, scope:SCOPES, callback:handleTokenResponse });
+      if (loadCachedToken()) {
+        try { await bootstrapApp(); setAuthState("app"); }
+        catch {
+          if (!(await restorePreviousLogin())) { clearToken(); setAuthState("login"); }
+        }
+      } else if (hasPreviousLogin()) {
+        if (!(await restorePreviousLogin())) setAuthState("login");
+      } else setAuthState("login");
+    })();
+  },[]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function scheduleSave(d){ if(!dataFileIdRef.current)return; setSyncStatus("syncing"); clearTimeout(saveTimerRef.current); saveTimerRef.current=setTimeout(async()=>{try{await updateJsonFile(dataFileIdRef.current,d);setSyncStatus("synced");}catch(e){console.error(e);setSyncStatus("error");}},1500); }
 
   const updateLibrary=useCallback(library=>{const d={...data,library};setData(d);scheduleSave(d);},[data]); // eslint-disable-line react-hooks/exhaustive-deps
